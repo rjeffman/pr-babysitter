@@ -1,0 +1,238 @@
+#!/bin/bash
+
+set -e
+
+# Usage function
+usage() {
+    echo "Usage: $0 [OPTIONS] <PR_NUMBER> [REPO]"
+    echo ""
+    echo "Monitor the status of checks for a GitHub PR"
+    echo ""
+    echo "Options:"
+    echo "  -f          Only show failed checks, do not monitor"
+    echo "  -w SECONDS  Wait time in seconds between checks (default: 600)"
+    echo "  -h          Show this help message"
+    echo ""
+    echo "Arguments:"
+    echo "  PR_NUMBER  The pull request number to monitor"
+    echo "  REPO       Optional repository in owner/repo format (defaults to current repo)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 123"
+    echo "  $0 123 owner/repo"
+    echo "  $0 -f 123"
+    echo "  $0 -w 300 123"
+    echo "  $0 -w 60 123 owner/repo"
+    exit 0
+}
+
+get_pr_head_sha() {
+    local pr_number="$1"
+    local repo="$2"
+    gh pr view "$pr_number" ${repo:+--repo "$repo"} --json headRefOid -q '.headRefOid'
+}
+
+get_check_runs() {
+    local repo="$1"
+    local ref="$2"
+
+    gh api \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "/repos/${repo}/commits/${ref}/check-runs" | \
+    jq '[.check_runs[] | {
+        id: .id,
+        name: .name,
+        state: (
+            if .status == "queued" then "QUEUED"
+            elif .status == "in_progress" then "IN_PROGRESS"
+            elif .status == "completed" and .conclusion == "success" then "SUCCESS"
+            elif .status == "completed" and .conclusion == "failure" then "FAILURE"
+            elif .status == "completed" and .conclusion == "cancelled" then "CANCELED"
+            else "UNKNOWN"
+            end
+        ),
+        link: .html_url,
+        completedAt: .completed_at
+    }]'
+}
+
+rerun_check() {
+    local repo="$1"
+    local check_run_id="$2"
+
+    echo gh api \
+        --method POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "/repos/${repo}/check-runs/${check_run_id}/rerequest"
+    gh api \
+        --method POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1
+}
+
+render_checks() {
+    # '.[] | select(.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED") |
+    FILTER="${1:-"true"}"
+    cat - | \
+    jq -r \
+    ".[] | select(${FILTER}) |
+        (if .state == \"SUCCESS\" then \"✅\"
+         elif .state == \"IN_PROGRESS\" then \"🔵\"
+         elif .state == \"QUEUED\" then \"🧵\"
+         elif .state == \"FAILURE\" then \"🚨\"
+         elif .state == \"CANCELED\" then \"✖️\"
+         else \"❓\" end) as \$emoji |
+        \"\\(\$emoji) \\(.name) (\\(.id))\\n\\(.link)\""
+}
+
+# Check if gh is installed
+if ! command -v gh &> /dev/null; then
+    echo "Error: gh CLI is not installed. Please install it from https://cli.github.com/"
+    exit 1
+fi
+
+# Check if jq is installed
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is not installed."
+    exit 1
+fi
+
+# Default wait time (10 minutes)
+WAIT_TIME=600
+FAILED_ONLY=false
+
+# Parse options
+while getopts "fw:h" opt; do
+    case $opt in
+        f)
+            FAILED_ONLY=true
+            ;;
+        w)
+            WAIT_TIME="$OPTARG"
+            ;;
+        h)
+            usage
+            ;;
+        *)
+            echo "Error: invalid option: ${opt}"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# Parse arguments
+PR_NUMBER="$1"
+REPO="${2:-}"
+
+if [ -z "$PR_NUMBER" ]; then
+    usage
+fi
+
+# If REPO is not provided, try to get it from the current git repository
+if [ -z "$REPO" ]; then
+    REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+    if [ -z "$REPO" ]; then
+        echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
+        exit 1
+    fi
+fi
+
+# Get the latest commit SHA for the PR
+PR_HEAD_SHA=$(get_pr_head_sha "$PR_NUMBER" "$REPO")
+if [ -z "$PR_HEAD_SHA" ]; then
+    echo "Error: Could not get HEAD SHA for PR #$PR_NUMBER"
+    exit 1
+fi
+
+# ANSI color codes
+WHITE="\033[1;37m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+# If failed-only mode, show failed checks and exit
+if [ "$FAILED_ONLY" = true ]; then
+    CHECKS_JSON=$(get_check_runs "$REPO" "$PR_HEAD_SHA")
+    FAILED_CHECKS=$(echo "$CHECKS_JSON" | jq '[.[] | select(.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED")] | length')
+
+    if [ "$FAILED_CHECKS" -eq 0 ]; then
+        echo "No failed checks found for PR #$PR_NUMBER"
+        exit 0
+    fi
+
+    echo "==================================="
+    echo "Failed Checks for PR #$PR_NUMBER"
+    echo "==================================="
+    echo ""
+    echo "$CHECKS_JSON" | \
+        render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"'
+    exit 0
+fi
+
+# Monitor checks
+echo "Monitoring checks for PR #$PR_NUMBER..."
+echo ""
+
+# Common filters
+FAILED_CHECK_FILTER=".state != \"SUCCESS\" and .state != \"IN_PROGRESS\" and .state != \"QUEUED\""
+RUNNING_CHECK_FILTER=".state == \"IN_PROGRESS\" or .state == \"QUEUED\""
+
+while true; do
+    # Clear screen for clean output
+    clear
+
+    echo "==================================="
+    echo "PR #$PR_NUMBER - Check Status"
+    echo "==================================="
+    echo ""
+
+    # Get latest commit SHA (in case there are new commits)
+    PR_HEAD_SHA=$(get_pr_head_sha "$PR_NUMBER" "$REPO")
+
+    # Get check status
+    CHECKS_JSON=$(get_check_runs "$REPO" "$PR_HEAD_SHA")
+
+    # Format and display output
+    echo "$CHECKS_JSON" | render_checks
+
+    echo ""
+    echo "-----------------------------------"
+    echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    # Check if there are any IN_PROGRESS or QUEUED checks
+    ACTIVE_CHECKS=$(echo "$CHECKS_JSON" | jq "[.[] | select(${RUNNING_CHECK_FILTER})] | length")
+
+    if [ "$ACTIVE_CHECKS" -eq 0 ]; then
+        # Check if there are any failed or canceled checks
+        FAILED_CHECKS=$(echo "$CHECKS_JSON" | jq "[.[] | select(${FAILED_CHECK_FILTER})] | length")
+
+        echo "All checks completed. Monitoring stopped."
+        echo "-----------------------------------"
+
+        if [ "$FAILED_CHECKS" -gt 0 ]; then
+            echo ""
+            read -p "There are $FAILED_CHECKS failed check(s). Re-run failed checks? (y/n): " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo ""
+                echo "Re-running failed checks..."
+                # Get all failed checks with their IDs and names
+                echo "$CHECKS_JSON" | jq -r "[.[] | select(${FAILED_CHECK_FILTER})] | .[] | \"\(.id)|\(.name)\"" | \
+                while IFS='|' read -r check_id check_name; do
+                    echo "  Requesting re-run for: $check_name"
+                    rerun_check "$REPO" "$check_id" ||:
+                done
+                echo "Done."
+            fi
+        fi
+    fi
+
+    echo "Press Ctrl+C to stop monitoring"
+    echo "-----------------------------------"
+
+    # Wait before next check
+    sleep "$WAIT_TIME"
+done
