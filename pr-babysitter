@@ -551,6 +551,11 @@ while true; do
             echo ""
             echo "There are ${FAILED_CHECKS} failed check(s)."
             rerun_github_action
+        else
+            echo ""
+            echo "✅ All checks passed successfully!"
+            # Exit monitoring loop
+            break
         fi
     fi
 
