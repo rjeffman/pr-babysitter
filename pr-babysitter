@@ -10,8 +10,10 @@ readonly DEFAULT_WAIT_TIME=600  # 10 minutes
 # Usage function
 usage() {
     echo "Usage: $0 [OPTIONS] <PR_NUMBER> [REPO]"
+    echo "       $0 [OPTIONS] -c CHECK_ID [REPO]"
+    echo "       $0 [OPTIONS] -W WORKFLOW_ID [REPO]"
     echo ""
-    echo "Monitor the status of checks for a GitHub PR"
+    echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
     echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
@@ -21,6 +23,8 @@ usage() {
     echo "                  check       - Re-run individual check runs"
     echo "                  workflow    - Re-run entire workflow runs"
     echo "                  failed-jobs - Re-run only failed jobs in workflows"
+    echo "  -c CHECK_ID   Directly re-run a specific check run by ID"
+    echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
     echo "  -h            Show this help message"
     echo ""
     echo "Arguments:"
@@ -28,12 +32,17 @@ usage() {
     echo "  REPO       Optional repository in owner/repo format (defaults to current repo)"
     echo ""
     echo "Examples:"
+    echo "  # PR Monitoring"
     echo "  $0 123                          # Monitor PR #123 in current repo"
     echo "  $0 123 owner/repo               # Monitor PR #123 in specified repo"
     echo "  $0 -f 123                       # Show only failed checks"
     echo "  $0 -w 300 123                   # Monitor with 5 minute interval"
     echo "  $0 -r workflow 123              # Auto re-run entire workflows"
     echo "  $0 -r failed-jobs -f 123        # Re-run failed jobs, show failed only"
+    echo ""
+    echo "  # Direct Re-run"
+    echo "  $0 -c 61523939520 owner/repo    # Re-run specific check run"
+    echo "  $0 -W 21373540416 owner/repo    # Re-run specific workflow run"
     exit 0
 }
 
@@ -178,9 +187,11 @@ fi
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
 RERUN_MODE="ask"  # ask, check, workflow, failed-jobs
+CHECK_ID=""       # Direct check run ID to re-run
+WORKFLOW_ID=""    # Direct workflow run ID to re-run
 
 # Parse options
-while getopts "fw:r:h" opt; do
+while getopts "fw:r:c:W:h" opt; do
     case $opt in
         f)
             FAILED_ONLY=true
@@ -200,6 +211,22 @@ while getopts "fw:r:h" opt; do
                     ;;
             esac
             ;;
+        c)
+            # Validate check run ID is numeric
+            if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
+                echo "Error: CHECK_ID must be a positive integer"
+                exit 1
+            fi
+            CHECK_ID="$OPTARG"
+            ;;
+        W)
+            # Validate workflow run ID is numeric
+            if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
+                echo "Error: WORKFLOW_ID must be a positive integer"
+                exit 1
+            fi
+            WORKFLOW_ID="$OPTARG"
+            ;;
         h)
             usage
             ;;
@@ -211,26 +238,42 @@ while getopts "fw:r:h" opt; do
 done
 shift $((OPTIND - 1))
 
-# Parse arguments
-PR_NUMBER="$1"
-REPO="${2:-}"
+# Parse arguments based on mode
+if [ -n "$CHECK_ID" ] || [ -n "$WORKFLOW_ID" ]; then
+    # Direct re-run mode: only REPO is required
+    REPO="${1:-}"
+    PR_NUMBER=""
 
-if [ -z "$PR_NUMBER" ]; then
-    usage
-fi
-
-# Validate PR_NUMBER is numeric
-if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
-    echo "Error: PR_NUMBER must be a positive integer"
-    exit 1
-fi
-
-# If REPO is not provided, try to get it from the current git repository
-if [ -z "$REPO" ]; then
-    REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
     if [ -z "$REPO" ]; then
-        echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
+        # Try to get repo from git
+        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        if [ -z "$REPO" ]; then
+            echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
+            exit 1
+        fi
+    fi
+else
+    # Normal PR monitoring mode
+    PR_NUMBER="$1"
+    REPO="${2:-}"
+
+    if [ -z "$PR_NUMBER" ]; then
+        usage
+    fi
+
+    # Validate PR_NUMBER is numeric
+    if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+        echo "Error: PR_NUMBER must be a positive integer"
         exit 1
+    fi
+
+    # If REPO is not provided, try to get it from the current git repository
+    if [ -z "$REPO" ]; then
+        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        if [ -z "$REPO" ]; then
+            echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
+            exit 1
+        fi
     fi
 fi
 
@@ -238,6 +281,27 @@ fi
 if ! [[ "$REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
     echo "Error: REPO must be in owner/repo format"
     exit 1
+fi
+
+# Handle direct re-run mode
+if [ -n "$CHECK_ID" ]; then
+    echo "Re-running check run ${CHECK_ID} in ${REPO}..."
+    if rerun_check "$REPO" "$CHECK_ID"; then
+        echo "✅ Successfully requested re-run for check ${CHECK_ID}"
+    else
+        echo "❌ Failed to re-run check ${CHECK_ID}"
+        exit 1
+    fi
+    exit 0
+elif [ -n "$WORKFLOW_ID" ]; then
+    echo "Re-running workflow run ${WORKFLOW_ID} in ${REPO}..."
+    if rerun_workflow_run "$REPO" "$WORKFLOW_ID"; then
+        echo "✅ Successfully requested re-run for workflow ${WORKFLOW_ID}"
+    else
+        echo "❌ Failed to re-run workflow ${WORKFLOW_ID}"
+        exit 1
+    fi
+    exit 0
 fi
 
 # Get the latest commit SHA for the PR
