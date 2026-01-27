@@ -61,16 +61,16 @@ rerun_check() {
     local repo="$1"
     local check_run_id="$2"
 
-    echo gh api \
+    if ! gh api \
         --method POST \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "/repos/${repo}/check-runs/${check_run_id}/rerequest"
-    gh api \
-        --method POST \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1
+        "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1; then
+        echo "    Warning: Failed to re-run check ${check_run_id}" >&2
+        return 1
+    fi
+
+    return 0
 }
 
 render_checks() {
@@ -241,7 +241,7 @@ while true; do
                 echo "$CHECKS_JSON" | jq -r "[.[] | select(${FAILED_CHECK_FILTER})] | .[] | \"\(.id)|\(.name)\"" | \
                 while IFS='|' read -r check_id check_name; do
                     echo "  Requesting re-run for: $check_name"
-                    rerun_check "$REPO" "$check_id" ||:
+                    rerun_check "$REPO" "$check_id" || true
                 done
                 echo "Done."
             fi
