@@ -19,4 +19,4 @@ repos:
             "-P",
             "./developer",
           ]
-        files: \.sh$
+        files: pr-babysitter$
