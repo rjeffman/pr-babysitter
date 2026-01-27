@@ -23,6 +23,7 @@ usage() {
     echo "                  check       - Re-run individual check runs"
     echo "                  workflow    - Re-run entire workflow runs"
     echo "                  failed-jobs - Re-run only failed jobs in workflows"
+    echo "                  label:NAME  - Add specified label NAME to the PR"
     echo "  -c CHECK_ID   Directly re-run a specific check run by ID"
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
     echo "  -h            Show this help message"
@@ -39,6 +40,7 @@ usage() {
     echo "  pr-babysitter -w 300 123                   # Monitor with 5 minute interval"
     echo "  pr-babysitter -r workflow 123              # Auto re-run entire workflows"
     echo "  pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs, show failed only"
+    echo "  pr-babysitter -r label:re-run 123          # Add 're-run' label to PR #12"
     echo ""
     echo "  # Direct Re-run"
     echo "  pr-babysitter -c 61523939520 owner/repo    # Re-run specific check run"
@@ -165,6 +167,20 @@ render_checks() {
         \"\\(\$emoji) \\(.name) (\\(.id))\\n\\(.link)\""
 }
 
+add_pr_label() {
+    local repo="${1}"
+    local pr_number="${2}"
+    local label="${3}"
+
+    if ! gh --repo "${repo}" pr edit "${pr_number}" --add-label "${label}"
+    then
+        echo "    Warning: Failed to add label '${label}' to PR #${pr_number}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
 rerun_github_action() {
     # Determine re-run mode
     rerun_action="${RERUN_MODE}"
@@ -174,6 +190,7 @@ rerun_github_action() {
         echo "  1) Re-run individual check runs (default)"
         echo "  2) Re-run entire workflow runs (all jobs)"
         echo "  3) Re-run only failed jobs in workflows"
+        echo "  4) Add a label to re-run checks"
         echo "  n) Skip re-run"
         echo ""
         read -p "Select option (1-3, n): " -n 1 -r
@@ -188,6 +205,9 @@ rerun_github_action() {
                 ;;
             3)
                 rerun_action="failed-jobs"
+                ;;
+            4)
+                rerun_action="label"
                 ;;
             [Nn])
                 rerun_action="skip"
@@ -261,6 +281,16 @@ rerun_github_action() {
                 done
             fi
             ;;
+        label)
+            echo ""
+            IFS= read -p "Label name: " -r LABEL_NAME
+            echo "Adding label '${LABEL_NAME}' to PR #${PR_NUMBER}..."
+            if add_pr_label "${REPO}" "${PR_NUMBER}" "${LABEL_NAME}"; then
+                echo "  Successfully added label '${LABEL_NAME}'"
+            else
+                echo "  Failed to add label"
+            fi
+            ;;
         skip)
             echo "Skipping re-run."
             return 0
@@ -295,7 +325,8 @@ fi
 # Default values
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
-RERUN_MODE="ask"  # ask, check, workflow, failed-jobs
+RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
+LABEL_NAME=""     # Label name to add to PR when using label mode
 CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
 
@@ -314,8 +345,17 @@ while getopts "fw:r:c:W:h" opt; do
                 check|workflow|failed-jobs|ask)
                     RERUN_MODE="${OPTARG}"
                     ;;
+                label:*)
+                    RERUN_MODE="label"
+                    LABEL_NAME="${OPTARG#label:}"
+                    if [[ -z "${LABEL_NAME}" ]]
+                    then
+                        echo "Error: Label name must not be empty."
+                        exit 1
+                    fi
+                    ;;
                 *)
-                    echo "Error: Invalid rerun mode. Use: check, workflow, failed-jobs, or ask"
+                    echo "Error: Invalid rerun mode. Use: check, workflow, failed-jobs, label:NAME, or ask"
                     exit 1
                     ;;
             esac
@@ -353,6 +393,17 @@ if [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
     REPO="${1:-}"
     PR_NUMBER=""
 
+    if [ -z "${REPO}" ]; then
+        # Try to get repo from git
+        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        if [ -z "${REPO}" ]; then
+            echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
+            exit 1
+        fi
+    fi
+elif [ "${RERUN_MODE}" == "label" ]; then
+    PR_NUMBER="${1}"
+    REPO="${2:-}"
     if [ -z "${REPO}" ]; then
         # Try to get repo from git
         REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
@@ -408,6 +459,15 @@ elif [ -n "${WORKFLOW_ID}" ]; then
         echo "✅ Successfully requested re-run for workflow ${WORKFLOW_ID}"
     else
         echo "❌ Failed to re-run workflow ${WORKFLOW_ID}"
+        exit 1
+    fi
+    exit 0
+elif [ "${RERUN_MODE}" == "label" ]; then
+    echo "Re-runing checks by adding label '${LABEL_NAME}' to '${REPO}'..."
+    if add_pr_label "${REPO}" "${PR_NUMBER}" "${LABEL_NAME}"; then
+        echo "✅ Successfully add label to ${REPO}"
+    else
+        echo "❌ Failed to add label to ${REPO}"
         exit 1
     fi
     exit 0
