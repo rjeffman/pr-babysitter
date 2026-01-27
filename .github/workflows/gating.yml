@@ -1,0 +1,23 @@
+---
+name: Gating tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  GITHUB_CI: true
+
+jobs:
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
+        env:
+          SHELLCHECK_OPTS: -x -a -o all -e SC2292 -e SC2310 -e SC2311

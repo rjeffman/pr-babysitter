@@ -1,0 +1,22 @@
+---
+repos:
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        args:
+          [
+            "-x",
+            "-a",
+            "-o",
+            "all",
+            "-e",
+            "SC2292",
+            "-e",
+            "SC2310",
+            "-e",
+            "SC2311",
+            "-P",
+            "./developer",
+          ]
+        files: \.sh$
