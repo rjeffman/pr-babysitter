@@ -312,8 +312,11 @@ if [ -z "${PR_HEAD_SHA}" ]; then
 fi
 
 # ANSI color codes
+# shellcheck disable=SC2034
 WHITE="\033[1;37m"
+# shellcheck disable=SC2034
 CYAN="\033[36m"
+# shellcheck disable=SC2034
 RESET="\033[0m"
 
 # If failed-only mode, show failed checks and exit
@@ -362,6 +365,7 @@ while true; do
 
     echo ""
     echo "-----------------------------------"
+    # shellcheck disable=SC2312
     echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
 
     # Check if there are any IN_PROGRESS or QUEUED checks
@@ -430,9 +434,11 @@ while true; do
                     # Get unique workflow run IDs from failed GitHub Actions checks
                     FAILED_GA_CHECKS=$(jq -r "[.[] | select(${FAILED_CHECK_FILTER}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${CHECKS_JSON}")
 
+                    # shellcheck disable=SC2312
                     if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
                         echo "  No GitHub Actions workflows to re-run"
                     else
+                        # shellcheck disable=SC2034
                         jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
                         while IFS='|' read -r check_id check_name app_name; do
                             echo "  Finding workflow run for: ${check_name}"
@@ -454,9 +460,11 @@ while true; do
                     # Get unique workflow run IDs from failed GitHub Actions checks
                     FAILED_GA_CHECKS=$(jq -r "[.[] | select(${FAILED_CHECK_FILTER}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${CHECKS_JSON}")
 
+                    # shellcheck disable=SC2312
                     if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
                         echo "  No GitHub Actions workflows to re-run"
                     else
+                        # shellcheck disable=SC2034
                         jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
                         while IFS='|' read -r check_id check_name app_name; do
                             echo "  Finding workflow run for: ${check_name}"
