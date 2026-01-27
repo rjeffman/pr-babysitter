@@ -58,7 +58,10 @@ get_check_runs() {
             end
         ),
         link: .html_url,
-        completedAt: .completed_at
+        completedAt: .completed_at,
+        checkSuiteId: .check_suite.id,
+        appName: (.app.name // ""),
+        isGitHubActions: (.app.slug == "github-actions")
     }]'
 }
 
