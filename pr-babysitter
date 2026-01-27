@@ -5,7 +5,7 @@ set -euo pipefail
 # GitHub API constants
 readonly GITHUB_API_VERSION="2022-11-28"
 readonly GITHUB_ACCEPT_HEADER="application/vnd.github+json"
-readonly DEFAULT_WAIT_TIME=600  # 10 minutes
+readonly DEFAULT_WAIT_TIME=300  # 5 minutes
 
 # Usage function
 usage() {
@@ -17,7 +17,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
-    echo "  -w SECONDS    Wait time in seconds between checks (default: 600)"
+    echo "  -w SECONDS    Wait time in seconds between checks (default: 300)"
     echo "  -r MODE       Re-run mode for failed checks:"
     echo "                  ask         - Prompt for re-run option (default)"
     echo "                  check       - Re-run individual check runs"
