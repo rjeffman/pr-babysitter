@@ -15,6 +15,8 @@ usage() {
     echo ""
     echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
     echo ""
+    echo "Desktop notifications will be sent when checks fail (if available)."
+    echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
     echo "  -w SECONDS    Wait time in seconds between checks (default: 300)"
@@ -52,6 +54,12 @@ get_pr_head_sha() {
     local pr_number="${1}"
     local repo="${2}"
     gh pr view "${pr_number}" ${repo:+--repo "${repo}"} --json headRefOid -q '.headRefOid'
+}
+
+get_pr_title() {
+    local pr_number="${1}"
+    local repo="${2}"
+    gh pr view "${pr_number}" ${repo:+--repo "${repo}"} --json title -q '.title'
 }
 
 get_check_runs() {
@@ -179,6 +187,47 @@ add_pr_label() {
     fi
 
     return 0
+}
+
+send_desktop_notification() {
+    local failed_count="${1}"
+    local pr_title="${2}"
+
+    # Check if notify-send is available
+    if ! command -v notify-send &> /dev/null; then
+        return 0
+    fi
+
+    # Determine urgency based on failure count
+    local urgency="normal"
+    if [ "${failed_count}" -gt 5 ]; then
+        urgency="critical"
+    fi
+
+    # Send notification
+    notify-send \
+        --urgency="${urgency}" \
+        --app-name="pr-babysitter" \
+        --icon="dialog-error" \
+        "PR Check Failures" \
+        "${failed_count} check(s) failed for:\n${pr_title}"
+}
+
+send_success_notification() {
+    local pr_title="${1}"
+
+    # Check if notify-send is available
+    if ! command -v notify-send &> /dev/null; then
+        return 0
+    fi
+
+    # Send notification
+    notify-send \
+        --urgency="normal" \
+        --app-name="pr-babysitter" \
+        --icon="dialog-information" \
+        "PR Checks Passed" \
+        "All checks passed successfully for:\n${pr_title}"
 }
 
 rerun_github_action() {
@@ -480,6 +529,12 @@ if [ -z "${PR_HEAD_SHA}" ]; then
     exit 1
 fi
 
+# Get the PR title for notifications
+PR_TITLE=$(get_pr_title "${PR_NUMBER}" "${REPO}")
+if [ -z "${PR_TITLE}" ]; then
+    PR_TITLE="PR #${PR_NUMBER}"
+fi
+
 # ANSI color codes
 # shellcheck disable=SC2034
 WHITE="\033[1;37m"
@@ -503,6 +558,7 @@ if [ "${FAILED_ONLY}" = true ]; then
     echo "==================================="
     echo ""
     render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"' <<<"${CHECKS_JSON}"
+    send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
     exit 0
 fi
 
@@ -513,6 +569,9 @@ echo ""
 # Common filters
 FAILED_CHECK_FILTER=".state != \"SUCCESS\" and .state != \"IN_PROGRESS\" and .state != \"QUEUED\""
 RUNNING_CHECK_FILTER=".state == \"IN_PROGRESS\" or .state == \"QUEUED\""
+
+# Track previous failure count to avoid notification spam
+PREV_FAILED_CHECKS=0
 
 while true; do
     # Clear screen for clean output
@@ -537,13 +596,17 @@ while true; do
     # shellcheck disable=SC2312
     echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
 
+    # Check for failed checks and send notification if count changed
+    FAILED_CHECKS=$(jq "[.[] | select(${FAILED_CHECK_FILTER})] | length" <<<"${CHECKS_JSON}")
+    if [ "${FAILED_CHECKS}" -gt 0 ] && [ "${FAILED_CHECKS}" -ne "${PREV_FAILED_CHECKS}" ]; then
+        send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
+        PREV_FAILED_CHECKS="${FAILED_CHECKS}"
+    fi
+
     # Check if there are any IN_PROGRESS or QUEUED checks
     ACTIVE_CHECKS=$(jq "[.[] | select(${RUNNING_CHECK_FILTER})] | length" <<<"${CHECKS_JSON}")
 
     if [ "${ACTIVE_CHECKS}" -eq 0 ]; then
-        # Check if there are any failed or canceled checks
-        FAILED_CHECKS=$(jq "[.[] | select(${FAILED_CHECK_FILTER})] | length" <<<"${CHECKS_JSON}")
-
         echo "All checks completed. Monitoring stopped."
         echo "-----------------------------------"
 
@@ -554,6 +617,7 @@ while true; do
         else
             echo ""
             echo "✅ All checks passed successfully!"
+            send_success_notification "${PR_TITLE}"
             # Exit monitoring loop
             break
         fi
