@@ -168,18 +168,31 @@ if ! gh auth status >/dev/null 2>&1; then
     exit 1
 fi
 
-# Default wait time
+# Default values
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
+RERUN_MODE="ask"  # ask, check, workflow, failed-jobs
 
 # Parse options
-while getopts "fw:h" opt; do
+while getopts "fw:r:h" opt; do
     case $opt in
         f)
             FAILED_ONLY=true
             ;;
         w)
             WAIT_TIME="$OPTARG"
+            ;;
+        r)
+            # Validate rerun mode
+            case "$OPTARG" in
+                check|workflow|failed-jobs|ask)
+                    RERUN_MODE="$OPTARG"
+                    ;;
+                *)
+                    echo "Error: Invalid rerun mode. Use: check, workflow, failed-jobs, or ask"
+                    exit 1
+                    ;;
+            esac
             ;;
         h)
             usage
@@ -295,18 +308,43 @@ while true; do
         if [ "$FAILED_CHECKS" -gt 0 ]; then
             echo ""
             echo "There are $FAILED_CHECKS failed check(s)."
-            echo ""
-            echo "Re-run options:"
-            echo "  1) Re-run individual check runs (default)"
-            echo "  2) Re-run entire workflow runs (all jobs)"
-            echo "  3) Re-run only failed jobs in workflows"
-            echo "  n) Skip re-run"
-            echo ""
-            read -p "Select option (1-3, n): " -n 1 -r
-            echo ""
 
-            case $REPLY in
-                1|"")
+            # Determine re-run mode
+            rerun_action="$RERUN_MODE"
+            if [ "$RERUN_MODE" = "ask" ]; then
+                echo ""
+                echo "Re-run options:"
+                echo "  1) Re-run individual check runs (default)"
+                echo "  2) Re-run entire workflow runs (all jobs)"
+                echo "  3) Re-run only failed jobs in workflows"
+                echo "  n) Skip re-run"
+                echo ""
+                read -p "Select option (1-3, n): " -n 1 -r
+                echo ""
+
+                case $REPLY in
+                    1|"")
+                        rerun_action="check"
+                        ;;
+                    2)
+                        rerun_action="workflow"
+                        ;;
+                    3)
+                        rerun_action="failed-jobs"
+                        ;;
+                    [Nn])
+                        rerun_action="skip"
+                        ;;
+                    *)
+                        echo "Invalid option. Skipping re-run."
+                        rerun_action="skip"
+                        ;;
+                esac
+            fi
+
+            # Execute the selected re-run action
+            case $rerun_action in
+                check)
                     echo ""
                     echo "Re-running individual check runs..."
                     # Get all failed checks with their IDs and names
@@ -317,7 +355,7 @@ while true; do
                     done
                     echo "Done."
                     ;;
-                2)
+                workflow)
                     echo ""
                     echo "Re-running entire workflow runs..."
                     # Get unique workflow run IDs from failed GitHub Actions checks
@@ -342,7 +380,7 @@ while true; do
                         echo "Done."
                     fi
                     ;;
-                3)
+                failed-jobs)
                     echo ""
                     echo "Re-running only failed jobs in workflows..."
                     # Get unique workflow run IDs from failed GitHub Actions checks
@@ -367,11 +405,11 @@ while true; do
                         echo "Done."
                     fi
                     ;;
-                [Nn])
+                skip)
                     echo "Skipping re-run."
                     ;;
                 *)
-                    echo "Invalid option. Skipping re-run."
+                    echo "Unknown re-run mode: $rerun_action. Skipping."
                     ;;
             esac
         fi
