@@ -100,6 +100,12 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
+# Verify gh authentication
+if ! gh auth status >/dev/null 2>&1; then
+    echo "Error: gh is not authenticated. Run 'gh auth login' first."
+    exit 1
+fi
+
 # Default wait time (10 minutes)
 WAIT_TIME=600
 FAILED_ONLY=false
