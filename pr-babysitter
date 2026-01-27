@@ -9,9 +9,9 @@ readonly DEFAULT_WAIT_TIME=600  # 10 minutes
 
 # Usage function
 usage() {
-    echo "Usage: $0 [OPTIONS] <PR_NUMBER> [REPO]"
-    echo "       $0 [OPTIONS] -c CHECK_ID [REPO]"
-    echo "       $0 [OPTIONS] -W WORKFLOW_ID [REPO]"
+    echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
+    echo "       pr-babysitter [OPTIONS] -c CHECK_ID [REPO]"
+    echo "       pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]"
     echo ""
     echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
     echo ""
@@ -33,16 +33,16 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  # PR Monitoring"
-    echo "  $0 123                          # Monitor PR #123 in current repo"
-    echo "  $0 123 owner/repo               # Monitor PR #123 in specified repo"
-    echo "  $0 -f 123                       # Show only failed checks"
-    echo "  $0 -w 300 123                   # Monitor with 5 minute interval"
-    echo "  $0 -r workflow 123              # Auto re-run entire workflows"
-    echo "  $0 -r failed-jobs -f 123        # Re-run failed jobs, show failed only"
+    echo "  pr-babysitter 123                          # Monitor PR #123 in current repo"
+    echo "  pr-babysitter 123 owner/repo               # Monitor PR #123 in specified repo"
+    echo "  pr-babysitter -f 123                       # Show only failed checks"
+    echo "  pr-babysitter -w 300 123                   # Monitor with 5 minute interval"
+    echo "  pr-babysitter -r workflow 123              # Auto re-run entire workflows"
+    echo "  pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs, show failed only"
     echo ""
     echo "  # Direct Re-run"
-    echo "  $0 -c 61523939520 owner/repo    # Re-run specific check run"
-    echo "  $0 -W 21373540416 owner/repo    # Re-run specific workflow run"
+    echo "  pr-babysitter -c 61523939520 owner/repo    # Re-run specific check run"
+    echo "  pr-babysitter -W 21373540416 owner/repo    # Re-run specific workflow run"
     exit 0
 }
 
