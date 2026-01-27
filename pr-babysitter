@@ -132,6 +132,12 @@ if [ -z "$PR_NUMBER" ]; then
     usage
 fi
 
+# Validate PR_NUMBER is numeric
+if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "Error: PR_NUMBER must be a positive integer"
+    exit 1
+fi
+
 # If REPO is not provided, try to get it from the current git repository
 if [ -z "$REPO" ]; then
     REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
@@ -139,6 +145,12 @@ if [ -z "$REPO" ]; then
         echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
         exit 1
     fi
+fi
+
+# Validate REPO format (owner/repo)
+if ! [[ "$REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
+    echo "Error: REPO must be in owner/repo format"
+    exit 1
 fi
 
 # Get the latest commit SHA for the PR
