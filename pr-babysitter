@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+# GitHub API constants
+readonly GITHUB_API_VERSION="2022-11-28"
+readonly GITHUB_ACCEPT_HEADER="application/vnd.github+json"
+readonly DEFAULT_WAIT_TIME=600  # 10 minutes
+
 # Usage function
 usage() {
     echo "Usage: $0 [OPTIONS] <PR_NUMBER> [REPO]"
@@ -37,8 +42,8 @@ get_check_runs() {
     local ref="$2"
 
     gh api \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
         "/repos/${repo}/commits/${ref}/check-runs" | \
     jq '[.check_runs[] | {
         id: .id,
@@ -63,10 +68,64 @@ rerun_check() {
 
     if ! gh api \
         --method POST \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
         "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1; then
         echo "    Warning: Failed to re-run check ${check_run_id}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+get_check_run_details() {
+    local repo="$1"
+    local check_run_id="$2"
+
+    gh api \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
+}
+
+get_workflow_run_id_from_check() {
+    local repo="$1"
+    local check_run_id="$2"
+
+    # Get check run details and extract workflow run URL
+    local details
+    details=$(get_check_run_details "$repo" "$check_run_id") || return 1
+
+    # Extract run_id from html_url (format: .../actions/runs/{run_id}/...)
+    echo "$details" | jq -r '.html_url' | grep -oP 'runs/\K[0-9]+' | head -1 || return 1
+}
+
+rerun_workflow_run() {
+    local repo="$1"
+    local run_id="$2"
+
+    if ! gh api \
+        --method POST \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        "/repos/${repo}/actions/runs/${run_id}/rerun" >/dev/null 2>&1; then
+        echo "    Warning: Failed to re-run workflow ${run_id}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+rerun_failed_jobs() {
+    local repo="$1"
+    local run_id="$2"
+
+    if ! gh api \
+        --method POST \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        "/repos/${repo}/actions/runs/${run_id}/rerun-failed-jobs" >/dev/null 2>&1; then
+        echo "    Warning: Failed to re-run failed jobs in workflow ${run_id}" >&2
         return 1
     fi
 
@@ -106,8 +165,8 @@ if ! gh auth status >/dev/null 2>&1; then
     exit 1
 fi
 
-# Default wait time (10 minutes)
-WAIT_TIME=600
+# Default wait time
+WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
 
 # Parse options
