@@ -68,6 +68,29 @@ usage() {
     exit 0
 }
 
+gh_api_get() {
+    local endpoint="${1}"
+    shift
+
+    gh api \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        "${endpoint}" \
+        "$@"
+}
+
+gh_api_post() {
+    local endpoint="${1}"
+    shift
+
+    gh api \
+        --method POST \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        "${endpoint}" \
+        "$@"
+}
+
 get_pr_head_sha() {
     local pr_number="${1}"
     local repo="${2}"
@@ -84,10 +107,7 @@ get_check_runs() {
     local repo="${1}"
     local ref="${2}"
 
-    gh api \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "/repos/${repo}/commits/${ref}/check-runs" | \
+    gh_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
     jq '[.check_runs[] | {
         id: .id,
         name: .name,
@@ -112,11 +132,7 @@ rerun_check() {
     local repo="${1}"
     local check_run_id="${2}"
 
-    if ! gh api \
-        --method POST \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1; then
+    if ! gh_api_post "/repos/${repo}/check-runs/${check_run_id}/rerequest" >/dev/null 2>&1; then
         echo "    Warning: Failed to re-run check ${check_run_id}" >&2
         return 1
     fi
@@ -128,10 +144,7 @@ get_check_run_details() {
     local repo="${1}"
     local check_run_id="${2}"
 
-    gh api \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
+    gh_api_get "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
 }
 
 get_workflow_run_id_from_check() {
@@ -150,11 +163,7 @@ rerun_workflow_run() {
     local repo="${1}"
     local run_id="${2}"
 
-    if ! gh api \
-        --method POST \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "/repos/${repo}/actions/runs/${run_id}/rerun" >/dev/null 2>&1; then
+    if ! gh_api_post "/repos/${repo}/actions/runs/${run_id}/rerun" >/dev/null 2>&1; then
         echo "    Warning: Failed to re-run workflow ${run_id}" >&2
         return 1
     fi
@@ -166,11 +175,7 @@ rerun_failed_jobs() {
     local repo="${1}"
     local run_id="${2}"
 
-    if ! gh api \
-        --method POST \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "/repos/${repo}/actions/runs/${run_id}/rerun-failed-jobs" >/dev/null 2>&1; then
+    if ! gh_api_post "/repos/${repo}/actions/runs/${run_id}/rerun-failed-jobs" >/dev/null 2>&1; then
         echo "    Warning: Failed to re-run failed jobs in workflow ${run_id}" >&2
         return 1
     fi
