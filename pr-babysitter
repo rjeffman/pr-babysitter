@@ -7,6 +7,16 @@ readonly GITHUB_API_VERSION="2022-11-28"
 readonly GITHUB_ACCEPT_HEADER="application/vnd.github+json"
 readonly DEFAULT_WAIT_TIME=300  # 5 minutes
 
+# Source configuration file if it exists
+# Configuration file can set GITHUB_TOKEN for authentication
+if [ -r "${HOME}/.pr-babysitter" ]; then
+    # shellcheck source=/dev/null
+    . "${HOME}/.pr-babysitter"
+elif [ -r "${HOME}/.config/pr-babysitter" ]; then
+    # shellcheck source=/dev/null
+    . "${HOME}/.config/pr-babysitter"
+fi
+
 # Usage function
 usage() {
     echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
@@ -16,6 +26,14 @@ usage() {
     echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
     echo ""
     echo "Desktop notifications will be sent when checks fail (if available)."
+    echo ""
+    echo "Configuration:"
+    echo "  The script will source configuration from the first file found:"
+    echo "    - \${HOME}/.pr-babysitter"
+    echo "    - \${HOME}/.config/pr-babysitter"
+    echo ""
+    echo "  Configuration file may contain:"
+    echo "    GITHUB_TOKEN=<token>    # GitHub authentication token"
     echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
