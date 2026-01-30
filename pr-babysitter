@@ -55,6 +55,7 @@ usage() {
     echo "                  label:NAME  - Add specified label NAME to the PR"
     echo "  -c CHECK_ID   Directly re-run a specific check run by ID"
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
+    echo "  -v            Enable verbose mode"
     echo "  -h            Show this help message"
     echo ""
     echo "Arguments:"
@@ -421,7 +422,7 @@ CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
 
 # Parse options
-while getopts "fw:r:c:W:h" opt; do
+while getopts "fw:r:c:W:vh" opt; do
     case ${opt} in
         f)
             FAILED_ONLY=true
@@ -465,6 +466,9 @@ while getopts "fw:r:c:W:h" opt; do
                 exit 1
             fi
             WORKFLOW_ID="${OPTARG}"
+            ;;
+        v)
+            VERBOSE="YES"
             ;;
         h)
             usage
