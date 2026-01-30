@@ -17,9 +17,9 @@ elif [ -r "${HOME}/.config/pr-babysitter" ]; then
     . "${HOME}/.config/pr-babysitter"
 fi
 
-# Warn if GITHUB_TOKEN is not set
-if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo -e "\033[1m⚠️  WARNING: GITHUB_TOKEN is not set. Check reruns might not work.\033[0m" >&2
+# Warn if neither GITHUB_TOKEN nor GH_TOKEN is set
+if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ]; then
+    echo -e "\033[1m⚠️  WARNING: Neither GITHUB_TOKEN nor GH_TOKEN is set. Check reruns might not work.\033[0m" >&2
     sleep 3
 fi
 
@@ -38,8 +38,11 @@ usage() {
     echo "    - \${HOME}/.pr-babysitter"
     echo "    - \${HOME}/.config/pr-babysitter"
     echo ""
-    echo "  Configuration file may contain:"
-    echo "    GITHUB_TOKEN=<token>    # GitHub authentication token"
+    echo "  Authentication:"
+    echo "    Either GH_TOKEN or GITHUB_TOKEN environment variables must be"
+    echo "    defined for individual check re-runs to work properly. Without"
+    echo "    proper authentication, re-run operations may fail. The variables"
+    echo "    can be set in the configuration file."
     echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
@@ -93,7 +96,6 @@ gh_api_post() {
         --method POST \
         -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
         -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
         "${endpoint}" \
         "$@"
 }
