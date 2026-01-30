@@ -205,11 +205,19 @@ rerun_failed_jobs() {
 }
 
 render_checks() {
-    # '.[] | select(.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED") |
     FILTER="${1:-"true"}"
+    # Note that the sorting is done so that SUCCESS is the last item.
     cat - | \
     jq -r \
-    ".[] | select(${FILTER}) |
+    "[.[] | select(${FILTER})] |
+    sort_by(
+        if .state == \"FAILURE\" then 1
+        elif .state == \"CANCELED\" then 2
+        elif .state == \"IN_PROGRESS\" then 3
+        elif .state == \"QUEUED\" then 4
+        elif .state == \"SUCCESS\" then 6
+        else 5 end
+    ) | .[] |
         (if .state == \"SUCCESS\" then \"✅\"
          elif .state == \"IN_PROGRESS\" then \"🔵\"
          elif .state == \"QUEUED\" then \"🧵\"
