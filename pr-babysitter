@@ -17,6 +17,12 @@ elif [ -r "${HOME}/.config/pr-babysitter" ]; then
     . "${HOME}/.config/pr-babysitter"
 fi
 
+# Warn if GITHUB_TOKEN is not set
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+    echo -e "\033[1m⚠️  WARNING: GITHUB_TOKEN is not set. Check reruns might not work.\033[0m" >&2
+    sleep 3
+fi
+
 # Usage function
 usage() {
     echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
@@ -87,6 +93,7 @@ gh_api_post() {
         --method POST \
         -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
         -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
         "${endpoint}" \
         "$@"
 }
