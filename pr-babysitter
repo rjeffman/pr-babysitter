@@ -246,11 +246,6 @@ send_desktop_notification() {
     local failed_count="${1}"
     local pr_title="${2}"
 
-    # Check if notify-send is available
-    if ! quiet command -v notify-send; then
-        return 0
-    fi
-
     # Determine urgency based on failure count
     local urgency="normal"
     if [ "${failed_count}" -gt 5 ]; then
@@ -258,7 +253,7 @@ send_desktop_notification() {
     fi
 
     # Send notification
-    notify-send \
+    "${NOTIFY}" \
         --urgency="${urgency}" \
         --app-name="pr-babysitter" \
         --icon="dialog-error" \
@@ -269,13 +264,8 @@ send_desktop_notification() {
 send_success_notification() {
     local pr_title="${1}"
 
-    # Check if notify-send is available
-    if ! quiet command -v notify-send; then
-        return 0
-    fi
-
     # Send notification
-    notify-send \
+    "${NOTIFY}" \
         --urgency="normal" \
         --app-name="pr-babysitter" \
         --icon="dialog-information" \
@@ -406,23 +396,44 @@ rerun_github_action() {
     echo "Done."
 }
 
-# Check if gh is installed
-if ! quiet command -v gh; then
-    echo "Error: gh CLI is not installed. Please install it from https://cli.github.com/"
-    exit 1
-fi
+check_dependencies() {
+    MISSING=0
 
-# Check if jq is installed
-if ! quiet command -v jq; then
-    echo "Error: jq is not installed."
-    exit 1
-fi
+    # Check if gh is installed
+    if ! quiet command -v gh; then
+        echo "Error: gh CLI is not installed."
+        echo "Please install it from https://cli.github.com/"
+        MISSING=1
+    fi
 
-# Verify gh authentication
-if ! quiet gh auth status; then
-    echo "Error: gh is not authenticated. Run 'gh auth login' first."
-    exit 1
-fi
+    # Check if jq is installed
+    if ! quiet command -v jq; then
+        echo "Error: jq is not installed."
+        MISSING=1
+    fi
+
+    # Check if fold is installed
+    if ! quiet command -v fold; then
+        echo "Error: fold is not installed."
+        MISSING=1
+    fi
+
+    # Check if notify-send is available
+    if quiet command -v notify-send; then
+        NOTIFY="notify-send"
+    fi
+
+    [[ "${MISSING}" -ne 0 ]] && exit 1
+
+    # Verify gh authentication
+    if ! quiet gh auth status; then
+        echo "Error: gh is not authenticated. Run 'gh auth login' first."
+        exit 1
+    fi
+}
+
+# Check dependencies
+check_dependencies
 
 # Default values
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
@@ -431,6 +442,8 @@ RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
 LABEL_NAME=""     # Label name to add to PR when using label mode
 CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
+
+NOTIFY="${NOTIFY:-":"}"
 
 # Parse options
 while getopts "fw:r:c:W:vh" opt; do

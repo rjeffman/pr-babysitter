@@ -3,6 +3,20 @@ pr-babysitter
 
 A CLI tool to monitor and restart failed checks in Github pull requests.
 
+## Dependencies
+
+### Required
+
+- **gh** - GitHub CLI tool (https://cli.github.com/)
+- **jq** - Command-line JSON processor
+- **fold** - Text folding utility (typically pre-installed on Unix systems)
+
+The script requires valid GitHub authentication via `gh auth login`.
+
+### Optional
+
+- **notify-send** - Desktop notification utility (for failure notifications)
+
 ## Usage
 
 ```
