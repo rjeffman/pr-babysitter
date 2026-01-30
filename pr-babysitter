@@ -216,7 +216,8 @@ render_checks() {
          elif .state == \"FAILURE\" then \"🚨\"
          elif .state == \"CANCELED\" then \"✖️\"
          else \"❓\" end) as \$emoji |
-        \"\\(\$emoji) \\(.name)\\n\\(.link)\""
+        \"\\(\$emoji) \\(.name)\" +
+        (if .state == \"FAILURE\" or .state == \"IN_PROGRESS\" then \"\\n\\(.link)\" else \"\" end)"
 }
 
 add_pr_label() {
