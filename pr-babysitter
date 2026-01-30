@@ -600,9 +600,9 @@ if [ "${FAILED_ONLY}" = true ]; then
         exit 0
     fi
 
-    echo "==================================="
+    echo "========================================"
     echo "Failed Checks for PR #${PR_NUMBER}"
-    echo "==================================="
+    echo "========================================"
     echo ""
     render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"' <<<"${CHECKS_JSON}"
     send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
@@ -624,9 +624,12 @@ while true; do
     # Clear screen for clean output
     clear
 
-    echo "==================================="
+    echo "=================================================="
+    # Display PR title (folded to 72 characters)
+    fold -w 72 -s <<<"${PR_TITLE}"
+    echo "https://github.com/${REPO}/pull/${PR_NUMBER}"
     echo "PR #${PR_NUMBER} - Check Status"
-    echo "==================================="
+    echo "=================================================="
     echo ""
 
     # Get latest commit SHA (in case there are new commits)
