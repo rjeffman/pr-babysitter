@@ -3,6 +3,34 @@ pr-babysitter
 
 A CLI tool to monitor and restart failed checks in Github pull requests.
 
+## Installation
+
+YouYou can install `pr-babysitter` by downloading the script using `curl` and placing it in a directory within your `$HOME` path, such as `~/bin`.
+
+### From a release tag
+
+To install a specific version from a release tag (e.g., `v1.0.0`), use the following command:
+
+```bash
+mkdir -p "$HOME/bin"
+curl -sL "https://github.com/rjeffman/pr-babysitter/releases/download/v1.0.0/pr-babysitter" -o "$HOME/bin/pr-babysitter"
+chmod +x "$HOME/bin/pr-babysitter"
+```
+
+Replace `v1.0.0` with the desired release tag.
+
+### From the main branch
+
+To install the latest version directly from the `main` branch, use:
+
+```bash
+mkdir -p "$HOME/bin"
+curl -sL "https://raw.githubusercontent.com/rjeffman/pr-babysitter/main/pr-babysitter" -o "$HOME/bin/pr-babysitter"
+chmod +x "$HOME/bin/pr-babysitter"
+```
+
+Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you might need to add it to your shell's configuration file (e.g., `.bashrc`, `.zshrc`) like so: `export PATH="$HOME/bin:$PATH"`.
+
 ## Dependencies
 
 ### Required
