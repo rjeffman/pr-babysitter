@@ -19,7 +19,9 @@ fi
 
 # Warn if neither GITHUB_TOKEN nor GH_TOKEN is set
 if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ]; then
-    echo -e "\033[1m⚠️  WARNING: Neither GITHUB_TOKEN nor GH_TOKEN is set. Check reruns might not work.\033[0m" >&2
+    echo -e "\033[1m⚠️  WARNING: Neither GITHUB_TOKEN nor GH_TOKEN is set. The script requires authentication to work.\033[0m" >&2
+    echo -e "\033[1mSet one of these variables with a GitHub personal access token.\033[0m" >&2
+    echo -e "\033[1mCreate a token at: https://github.com/settings/tokens\033[0m" >&2
     sleep 3
 fi
 
@@ -41,9 +43,12 @@ usage() {
     echo ""
     echo "  Authentication:"
     echo "    Either GH_TOKEN or GITHUB_TOKEN environment variables must be"
-    echo "    defined for individual check re-runs to work properly. Without"
-    echo "    proper authentication, re-run operations may fail. The variables"
-    echo "    can be set in the configuration file."
+    echo "    set with a valid GitHub personal access token. Without proper"
+    echo "    authentication, the script will not work. The variables can be"
+    echo "    set in the configuration file."
+    echo ""
+    echo "    To create a token: https://github.com/settings/tokens"
+    echo "    Required scopes: repo (full control of private repositories)"
     echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
@@ -84,41 +89,87 @@ usage() {
     exit 0
 }
 
+get_api_url() {
+    echo "https://api.github.com"
+}
+
+get_api_token() {
+    echo "${GITHUB_TOKEN:-${GH_TOKEN}}"
+}
+
+get_repo_from_git() {
+    # Try to extract repository from git remote URL
+    local remote_url
+    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+
+    if [ -z "${remote_url}" ]; then
+        return 1
+    fi
+
+    # Extract owner/repo from various URL formats:
+    # - https://github.com/owner/repo.git
+    # - git@github.com:owner/repo.git
+    # - https://github.com/owner/repo
+    if [[ "${remote_url}" =~ github\.com[:/]([^/]+/[^/]+)(\.git)?$ ]]; then
+        local repo="${BASH_REMATCH[1]}"
+        echo "${repo%.git}"
+        return 0
+    fi
+
+    return 1
+}
+
 gh_api_get() {
     local endpoint="${1}"
     shift
+    local api_url
+    local token
+    api_url=$(get_api_url)
+    token=$(get_api_token)
 
-    gh api \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+    if [ -z "${token}" ]; then
+        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
         -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        "${endpoint}" \
+        -H "Authorization: Bearer ${token}" \
+        "${api_url}${endpoint}" \
         "$@"
 }
 
 gh_api_post() {
     local endpoint="${1}"
     shift
-    local token="${GITHUB_TOKEN:-${GH_TOKEN}}"
+    local api_url
+    local token
+    api_url=$(get_api_url)
+    token=$(get_api_token)
 
-    gh api \
-        --method POST \
+    if [ -z "${token}" ]; then
+        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -X POST \
         -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
         -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        ${token:+-H "Authorization: Bearer ${token}"} \
-        "${endpoint}" \
+        -H "Authorization: Bearer ${token}" \
+        "${api_url}${endpoint}" \
         "$@"
 }
 
 get_pr_head_sha() {
     local pr_number="${1}"
     local repo="${2}"
-    gh pr view "${pr_number}" ${repo:+--repo "${repo}"} --json headRefOid -q '.headRefOid'
+    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.head.sha'
 }
 
 get_pr_title() {
     local pr_number="${1}"
     local repo="${2}"
-    gh pr view "${pr_number}" ${repo:+--repo "${repo}"} --json title -q '.title'
+    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
 }
 
 get_check_runs() {
@@ -271,7 +322,9 @@ add_pr_label() {
     local pr_number="${2}"
     local label="${3}"
 
-    if ! gh --repo "${repo}" pr edit "${pr_number}" --add-label "${label}"
+    if ! quiet gh_api_post "/repos/${repo}/issues/${pr_number}/labels" \
+        -H "Content-Type: application/json" \
+        -d "{\"labels\":[\"${label}\"]}"
     then
         echo "    Warning: Failed to add label '${label}' to PR #${pr_number}" >&2
         return 1
@@ -707,10 +760,9 @@ monitor_multiple_prs() {
 check_dependencies() {
     MISSING=0
 
-    # Check if gh is installed
-    if ! quiet command -v gh; then
-        echo "Error: gh CLI is not installed."
-        echo "Please install it from https://cli.github.com/"
+    # Check if curl is installed
+    if ! quiet command -v curl; then
+        echo "Error: curl is not installed."
         MISSING=1
     fi
 
@@ -726,18 +778,18 @@ check_dependencies() {
         MISSING=1
     fi
 
+    # Check if git is installed
+    if ! quiet command -v git; then
+        echo "Error: git is not installed."
+        MISSING=1
+    fi
+
     # Check if notify-send is available
     if quiet command -v notify-send; then
         NOTIFY="notify-send"
     fi
 
-    [[ "${MISSING}" -ne 0 ]] && exit 1
-
-    # Verify gh authentication
-    if ! quiet gh auth status; then
-        echo "Error: gh is not authenticated. Run 'gh auth login' first."
-        exit 1
-    fi
+    [[ "${MISSING}" -ne 0 ]] && exit 1 || return 0
 }
 
 # Check dependencies
@@ -853,7 +905,7 @@ elif [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
 
     if [ -z "${REPO}" ]; then
         # Try to get repo from git
-        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        REPO=$(get_repo_from_git 2>/dev/null || echo "")
         if [ -z "${REPO}" ]; then
             echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
             exit 1
@@ -864,7 +916,7 @@ elif [ "${RERUN_MODE}" == "label" ]; then
     REPO="${2:-}"
     if [ -z "${REPO}" ]; then
         # Try to get repo from git
-        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        REPO=$(get_repo_from_git 2>/dev/null || echo "")
         if [ -z "${REPO}" ]; then
             echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
             exit 1
@@ -887,7 +939,7 @@ else
 
     # If REPO is not provided, try to get it from the current git repository
     if [ -z "${REPO}" ]; then
-        REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+        REPO=$(get_repo_from_git 2>/dev/null || echo "")
         if [ -z "${REPO}" ]; then
             echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
             exit 1
