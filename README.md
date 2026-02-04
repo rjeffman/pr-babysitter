@@ -1,11 +1,11 @@
 pr-babysitter
 =============
 
-A CLI tool to monitor and restart failed checks in Github pull requests.
+A CLI tool to monitor and restart failed checks in GitHub pull requests. Also supports monitoring checks on Gitea/Forgejo instances (Codeberg, self-hosted).
 
 ## Installation
 
-YouYou can install `pr-babysitter` by downloading the script using `curl` and placing it in a directory within your `$HOME` path, such as `~/bin`.
+You can install `pr-babysitter` by downloading the script using `curl` and placing it in a directory within your `$HOME` path, such as `~/bin`.
 
 ### From a release tag
 
@@ -40,7 +40,7 @@ Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you
 - **git** - Version control system (for automatic repository detection)
 - **fold** - Text folding utility (typically pre-installed on Unix systems)
 
-The script requires a GitHub personal access token (see Authentication section below).
+**Note:** Authentication token is only required for GitHub. Gitea/Forgejo instances use public API endpoints.
 
 ### Optional
 
@@ -55,9 +55,15 @@ pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]
 pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]
 ```
 
-Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows. Can also monitor multiple PRs simultaneously.
+Monitor the status of checks for pull requests on GitHub, Codeberg, or custom Gitea/Forgejo instances. For GitHub, can also directly re-run failed checks/workflows. Supports monitoring multiple PRs simultaneously.
 
 Desktop notifications will be sent when checks fail (if available).
+
+## Supported Services
+
+- **GitHub** (github.com) - Full support: monitoring and re-running checks
+- **Codeberg** (codeberg.org) - Monitoring only (no re-run support)
+- **Custom Gitea/Forgejo** - Monitoring only (no re-run support)
 
 ## Configuration
 
@@ -67,7 +73,9 @@ The script will source configuration from the first file found:
 
 ### Authentication
 
-The script requires a GitHub personal access token with `repo` scope set in either `GITHUB_TOKEN` or `GH_TOKEN` environment variable.
+**For GitHub (required):**
+
+A GitHub personal access token with `repo` scope is required. Set it in either `GITHUB_TOKEN` or `GH_TOKEN` environment variable.
 
 You can set the token by:
 - Exporting it in your shell:
@@ -79,19 +87,27 @@ You can set the token by:
   GITHUB_TOKEN="your_token_here"
   ```
 
+**For Gitea/Forgejo (Codeberg, etc.):**
+
+No authentication required. The script uses public API endpoints.
+
 ## Options
 
 - `-f` - Only show failed checks, do not monitor
 - `-w SECONDS` - Wait time in seconds between checks (default: 300)
+- `-s SERVICE` - Remote service to use (default: github)
+  - `github` - GitHub (github.com)
+  - `codeberg` - Codeberg (codeberg.org)
+  - `https://HOST` - Custom Gitea/Forgejo instance URL
 - `-m REPO` - Monitor multiple PRs for the specified repository
-- `-r MODE` - Re-run mode for failed checks:
+- `-r MODE` - Re-run mode for failed checks (GitHub only):
   - `ask` - Prompt for re-run option (default)
   - `check` - Re-run individual check runs
   - `workflow` - Re-run entire workflow runs
   - `failed-jobs` - Re-run only failed jobs in workflows
   - `label:NAME` - Add specified label NAME to the PR
-- `-c CHECK_ID` - Directly re-run a specific check run by ID
-- `-W WORKFLOW_ID` - Directly re-run a specific workflow run by ID
+- `-c CHECK_ID` - Directly re-run a specific check run by ID (GitHub only)
+- `-W WORKFLOW_ID` - Directly re-run a specific workflow run by ID (GitHub only)
 - `-v` - Enable verbose mode
 - `-h` - Show this help message
 
@@ -105,23 +121,34 @@ You can set the token by:
 ### PR Monitoring
 
 ```bash
+# GitHub (default)
 pr-babysitter 123                          # Monitor PR #123 in current repo
 pr-babysitter 123 owner/repo               # Monitor PR #123 in specified repo
 pr-babysitter -f 123                       # Show only failed checks
 pr-babysitter -w 300 123                   # Monitor with 5 minute interval
-pr-babysitter -r workflow 123              # Auto re-run entire workflows
-pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs, show failed only
-pr-babysitter -r label:re-run 123          # Add 're-run' label to PR #12
+pr-babysitter -r workflow 123              # Auto re-run entire workflows (GitHub only)
+pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs (GitHub only)
+pr-babysitter -r label:re-run 123          # Add 're-run' label to PR (GitHub only)
+
+# Codeberg
+pr-babysitter -s codeberg 123 owner/repo   # Monitor PR on Codeberg
+
+# Custom Gitea/Forgejo instance
+pr-babysitter -s https://git.example.com 123 owner/repo
 ```
 
 ### Multi-PR Monitoring
 
 ```bash
+# GitHub
 pr-babysitter -m owner/repo 123 456 789    # Monitor PRs 123, 456, 789
 pr-babysitter -w 60 -m owner/repo 123 456  # Monitor with 1-minute interval
+
+# Codeberg
+pr-babysitter -s codeberg -m owner/repo 123 456 789
 ```
 
-### Direct Re-run
+### Direct Re-run (GitHub only)
 
 ```bash
 pr-babysitter -c 61523939520 owner/repo    # Re-run specific check run

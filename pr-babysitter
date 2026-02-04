@@ -17,13 +17,7 @@ elif [ -r "${HOME}/.config/pr-babysitter" ]; then
     . "${HOME}/.config/pr-babysitter"
 fi
 
-# Warn if neither GITHUB_TOKEN nor GH_TOKEN is set
-if [ -z "${GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ]; then
-    echo -e "\033[1m⚠️  WARNING: Neither GITHUB_TOKEN nor GH_TOKEN is set. The script requires authentication to work.\033[0m" >&2
-    echo -e "\033[1mSet one of these variables with a GitHub personal access token.\033[0m" >&2
-    echo -e "\033[1mCreate a token at: https://github.com/settings/tokens\033[0m" >&2
-    sleep 3
-fi
+# Note: Token warning will be shown later if using GitHub service
 
 # Usage function
 usage() {
@@ -42,17 +36,22 @@ usage() {
     echo "    - \${HOME}/.config/pr-babysitter"
     echo ""
     echo "  Authentication:"
-    echo "    Either GH_TOKEN or GITHUB_TOKEN environment variables must be"
-    echo "    set with a valid GitHub personal access token. Without proper"
-    echo "    authentication, the script will not work. The variables can be"
-    echo "    set in the configuration file."
+    echo "    For GitHub: Either GH_TOKEN or GITHUB_TOKEN environment variables"
+    echo "    must be set with a valid GitHub personal access token. The variables"
+    echo "    can be set in the configuration file."
     echo ""
     echo "    To create a token: https://github.com/settings/tokens"
     echo "    Required scopes: repo (full control of private repositories)"
     echo ""
+    echo "    For Gitea/Forgejo: No authentication required (uses public API)"
+    echo ""
     echo "Options:"
     echo "  -f            Only show failed checks, do not monitor"
     echo "  -w SECONDS    Wait time in seconds between checks (default: 300)"
+    echo "  -s SERVICE    Remote service (default: github)"
+    echo "                  github              - GitHub (github.com)"
+    echo "                  codeberg            - Codeberg (codeberg.org)"
+    echo "                  https://HOST        - Custom service URL"
     echo "  -r MODE       Re-run mode for failed checks:"
     echo "                  ask         - Prompt for re-run option (default)"
     echo "                  check       - Re-run individual check runs"
@@ -73,6 +72,8 @@ usage() {
     echo "  # PR Monitoring"
     echo "  pr-babysitter 123                          # Monitor PR #123 in current repo"
     echo "  pr-babysitter 123 owner/repo               # Monitor PR #123 in specified repo"
+    echo "  pr-babysitter -s codeberg 123 owner/repo   # Monitor on Codeberg"
+    echo "  pr-babysitter -s https://git.example.com 123 owner/repo  # Custom instance"
     echo "  pr-babysitter -f 123                       # Show only failed checks"
     echo "  pr-babysitter -w 300 123                   # Monitor with 5 minute interval"
     echo "  pr-babysitter -r workflow 123              # Auto re-run entire workflows"
@@ -89,8 +90,72 @@ usage() {
     exit 0
 }
 
+get_hostname() {
+    local service="${SERVICE:-github}"
+
+    case "${service}" in
+        github)
+            echo "github.com"
+            ;;
+        codeberg)
+            echo "codeberg.org"
+            ;;
+        https://*)
+            # Extract hostname from URL
+            echo "${service#https://}" | cut -d/ -f1
+            ;;
+        http://*)
+            # Extract hostname from URL
+            echo "${service#http://}" | cut -d/ -f1
+            ;;
+        *)
+            # Assume it's a hostname
+            echo "${service}"
+            ;;
+    esac
+}
+
 get_api_url() {
-    echo "https://api.github.com"
+    local service="${SERVICE:-github}"
+    local hostname
+    hostname=$(get_hostname)
+
+    case "${service}" in
+        github)
+            echo "https://api.github.com"
+            ;;
+        codeberg)
+            # Codeberg uses Forgejo/Gitea API
+            echo "https://${hostname}/api/v1"
+            ;;
+        https://*|http://*)
+            # Custom instance - try Gitea/Forgejo API first
+            # GitHub Enterprise would use /api/v3
+            echo "${service%/}/api/v1"
+            ;;
+        *)
+            # Default to Gitea/Forgejo API for custom hostnames
+            echo "https://${hostname}/api/v1"
+            ;;
+    esac
+}
+
+get_pr_url() {
+    local repo="${1}"
+    local pr_number="${2}"
+    local hostname
+    local service="${SERVICE:-github}"
+    hostname=$(get_hostname)
+
+    # GitHub uses /pull/ (singular), Gitea/Forgejo use /pulls/ (plural)
+    case "${service}" in
+        github)
+            echo "https://${hostname}/${repo}/pull/${pr_number}"
+            ;;
+        *)
+            echo "https://${hostname}/${repo}/pulls/${pr_number}"
+            ;;
+    esac
 }
 
 get_api_token() {
@@ -107,10 +172,10 @@ get_repo_from_git() {
     fi
 
     # Extract owner/repo from various URL formats:
-    # - https://github.com/owner/repo.git
-    # - git@github.com:owner/repo.git
-    # - https://github.com/owner/repo
-    if [[ "${remote_url}" =~ github\.com[:/]([^/]+/[^/]+)(\.git)?$ ]]; then
+    # - https://host.com/owner/repo.git
+    # - git@host.com:owner/repo.git
+    # - https://host.com/owner/repo
+    if [[ "${remote_url}" =~ [:/]([^/]+/[^/]+)(\.git)?$ ]]; then
         local repo="${BASH_REMATCH[1]}"
         echo "${repo%.git}"
         return 0
@@ -123,41 +188,63 @@ gh_api_get() {
     local endpoint="${1}"
     shift
     local api_url
-    local token
+    local service="${SERVICE:-github}"
     api_url=$(get_api_url)
-    token=$(get_api_token)
 
-    if [ -z "${token}" ]; then
-        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
-        return 1
-    fi
+    # Only GitHub requires authentication token
+    case "${service}" in
+        github)
+            local token
+            token=$(get_api_token)
 
-    curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        -H "Authorization: Bearer ${token}" \
-        "${api_url}${endpoint}" \
-        "$@"
+            if [ -z "${token}" ]; then
+                echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+                return 1
+            fi
+
+            curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+                -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+                -H "Authorization: Bearer ${token}" \
+                "${api_url}${endpoint}" \
+                "$@"
+            ;;
+        *)
+            # Gitea/Forgejo - no authentication
+            curl -s "${api_url}${endpoint}" "$@"
+            ;;
+    esac
 }
 
 gh_api_post() {
     local endpoint="${1}"
     shift
     local api_url
-    local token
+    local service="${SERVICE:-github}"
     api_url=$(get_api_url)
-    token=$(get_api_token)
 
-    if [ -z "${token}" ]; then
-        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
-        return 1
-    fi
+    # Only GitHub requires authentication token
+    case "${service}" in
+        github)
+            local token
+            token=$(get_api_token)
 
-    curl -s -X POST \
-        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-        -H "Authorization: Bearer ${token}" \
-        "${api_url}${endpoint}" \
-        "$@"
+            if [ -z "${token}" ]; then
+                echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+                return 1
+            fi
+
+            curl -s -X POST \
+                -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+                -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+                -H "Authorization: Bearer ${token}" \
+                "${api_url}${endpoint}" \
+                "$@"
+            ;;
+        *)
+            # Gitea/Forgejo - no authentication
+            curl -s -X POST "${api_url}${endpoint}" "$@"
+            ;;
+    esac
 }
 
 get_pr_head_sha() {
@@ -175,26 +262,52 @@ get_pr_title() {
 get_check_runs() {
     local repo="${1}"
     local ref="${2}"
+    local service="${SERVICE:-github}"
 
-    gh_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
-    jq '[.check_runs[] | {
-        id: .id,
-        name: .name,
-        state: (
-            if .status == "queued" then "QUEUED"
-            elif .status == "in_progress" then "IN_PROGRESS"
-            elif .status == "completed" and .conclusion == "success" then "SUCCESS"
-            elif .status == "completed" and .conclusion == "failure" then "FAILURE"
-            elif .status == "completed" and .conclusion == "cancelled" then "CANCELED"
-            else "UNKNOWN"
-            end
-        ),
-        link: .html_url,
-        completedAt: .completed_at,
-        checkSuiteId: .check_suite.id,
-        appName: (.app.name // ""),
-        isGitHubActions: (.app.slug == "github-actions")
-    }]'
+    case "${service}" in
+        github)
+            # GitHub check-runs API
+            gh_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
+            jq '[.check_runs[] | {
+                id: .id,
+                name: .name,
+                state: (
+                    if .status == "queued" then "QUEUED"
+                    elif .status == "in_progress" then "IN_PROGRESS"
+                    elif .status == "completed" and .conclusion == "success" then "SUCCESS"
+                    elif .status == "completed" and .conclusion == "failure" then "FAILURE"
+                    elif .status == "completed" and .conclusion == "cancelled" then "CANCELED"
+                    else "UNKNOWN"
+                    end
+                ),
+                link: .html_url,
+                completedAt: .completed_at,
+                checkSuiteId: .check_suite.id,
+                appName: (.app.name // ""),
+                isGitHubActions: (.app.slug == "github-actions")
+            }]'
+            ;;
+        *)
+            # Gitea/Forgejo commit statuses API
+            #
+            gh_api_get "/repos/${repo}/commits/${ref}/status" | \
+            jq '[.statuses[]? | {
+                name: .context,
+                state: (
+                    if .status == "pending" then "IN_PROGRESS"
+                    elif .status == "success" then "SUCCESS"
+                    elif .status == "failure" or .state == "error" then "FAILURE"
+                    else "UNKNOWN"
+                    end
+                ),
+                link: .target_url,
+                completedAt: .updated_at,
+                checkSuiteId: .id,
+                appName: (.creator.login // "Forgejo"),
+                isGitHubActions: false
+            }]'
+            ;;
+    esac
 }
 
 quiet() {
@@ -365,6 +478,16 @@ send_success_notification() {
 }
 
 rerun_github_action() {
+    local service="${SERVICE:-github}"
+
+    # Only allow re-runs for GitHub
+    if [ "${service}" != "github" ]; then
+        echo ""
+        echo "Note: Check re-run functionality is only available for GitHub."
+        echo "Gitea/Forgejo services do not support automatic check re-runs via API."
+        return 0
+    fi
+
     # Determine re-run mode
     rerun_action="${RERUN_MODE}"
     if [ "${RERUN_MODE}" = "ask" ]; then
@@ -607,7 +730,7 @@ monitor_multiple_prs() {
             exit 0
         fi
 
-        if [ "${has_restartable_failures}" = true ]; then
+        if [ "${has_restartable_failures}" = true ] && [ "${SERVICE}" = "github" ]; then
             echo "Press 'R' to restart failed checks, or wait for auto-refresh..."
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
@@ -634,9 +757,8 @@ monitor_multiple_prs() {
                                 echo ""
                                 echo "=================================================="
                                 # Display PR title (folded to 72 characters)
-                                fold -w 72 -s <<<"${pr_titles[${pr_number}]}"
+                                fold -w 72 -s <<<"PR #${pr_number} - ${pr_titles[${pr_number}]}"
                                 echo "https://github.com/${repo}/pull/${pr_number}"
-                                echo "PR #${pr_number} - Check Status"
                                 echo "=================================================="
                                 echo ""
 
@@ -747,6 +869,14 @@ monitor_multiple_prs() {
                     echo ""
                 fi
             fi
+        elif [ "${has_restartable_failures}" = true ]; then
+            # Failures exist but service doesn't support re-runs
+            echo "Note: Check re-run functionality is only available for GitHub."
+            echo "Press Ctrl+C to stop monitoring"
+            echo "-----------------------------------"
+
+            # Wait before next check
+            sleep "${WAIT_TIME}"
         else
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
@@ -798,6 +928,7 @@ check_dependencies
 # Default values
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
+SERVICE="github"  # Default service (github, codeberg, or custom URL)
 RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
 LABEL_NAME=""     # Label name to add to PR when using label mode
 CHECK_ID=""       # Direct check run ID to re-run
@@ -808,13 +939,16 @@ MULTI_PR_REPO=""     # Repository for multi-PR mode
 NOTIFY="${NOTIFY:-":"}"
 
 # Parse options
-while getopts "fw:r:c:W:m:vh" opt; do
+while getopts "fw:s:r:c:W:m:vh" opt; do
     case ${opt} in
         f)
             FAILED_ONLY=true
             ;;
         w)
             WAIT_TIME="${OPTARG}"
+            ;;
+        s)
+            SERVICE="${OPTARG}"
             ;;
         r)
             # Validate rerun mode
@@ -953,6 +1087,21 @@ if ! [[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
     exit 1
 fi
 
+# Check if re-run operations are attempted with non-GitHub services
+if [ "${SERVICE}" != "github" ]; then
+    if [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ] || [ "${RERUN_MODE}" == "label" ]; then
+        echo "Error: Check re-run operations are only supported for GitHub service." >&2
+        echo "Gitea/Forgejo services do not support automatic check re-runs via API." >&2
+        exit 1
+    fi
+    if [ "${RERUN_MODE}" != "ask" ]; then
+        echo "Error: Re-run mode '${RERUN_MODE}' is not supported for ${SERVICE}." >&2
+        echo "Gitea/Forgejo services do not support automatic check re-runs via API." >&2
+        echo "Use '-r ask' or omit the -r option for monitoring mode only." >&2
+        exit 1
+    fi
+fi
+
 # Handle direct re-run mode
 if [ -n "${CHECK_ID}" ]; then
     echo "Re-running check run ${CHECK_ID} in ${REPO}..."
@@ -1040,9 +1189,8 @@ while true; do
 
     echo "=================================================="
     # Display PR title (folded to 72 characters)
-    fold -w 72 -s <<<"${PR_TITLE}"
+    fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}"
     echo "https://github.com/${REPO}/pull/${PR_NUMBER}"
-    echo "PR #${PR_NUMBER} - Check Status"
     echo "=================================================="
     echo ""
 
@@ -1077,7 +1225,14 @@ while true; do
         if [ "${FAILED_CHECKS}" -gt 0 ]; then
             echo ""
             echo "There are ${FAILED_CHECKS} failed check(s)."
-            rerun_github_action
+            if [ "${SERVICE}" = "github" ]; then
+                rerun_github_action
+            else
+                echo ""
+                echo "Note: Check re-run functionality is only available for GitHub."
+                echo "Gitea/Forgejo services do not support automatic check re-runs via API."
+                break
+            fi
         else
             echo ""
             echo "✅ All checks passed successfully!"
