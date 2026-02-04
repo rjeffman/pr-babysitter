@@ -15,6 +15,14 @@ To check code style run:
 shellcheck -x -a -o all -e SC2292 -e SC2310 -e SC2311 pr-babysitter
 ```
 
+## Managing Git repository
+
+**MANDATORY**: **Never** commit changes automatically, wait for developer explicit request to commit changes.
+
+Follow the restrictions on the file `.gitignore` and **never** commit any of this files:
+    - CLAUDE.md
+    - GEMINI.md
+
 ## Commit message
 
 - **MANDATORY**: No line on the commit message must have more than 72 characters.
