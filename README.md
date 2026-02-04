@@ -35,11 +35,12 @@ Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you
 
 ### Required
 
-- **gh** - GitHub CLI tool (https://cli.github.com/)
+- **curl** - HTTP client for making API requests
 - **jq** - Command-line JSON processor
+- **git** - Version control system (for automatic repository detection)
 - **fold** - Text folding utility (typically pre-installed on Unix systems)
 
-The script requires valid GitHub authentication via `gh auth login`.
+The script requires a GitHub personal access token (see Authentication section below).
 
 ### Optional
 
@@ -51,9 +52,10 @@ The script requires valid GitHub authentication via `gh auth login`.
 pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]
 pr-babysitter [OPTIONS] -c CHECK_ID [REPO]
 pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]
+pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]
 ```
 
-Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows
+Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows. Can also monitor multiple PRs simultaneously.
 
 Desktop notifications will be sent when checks fail (if available).
 
@@ -65,15 +67,23 @@ The script will source configuration from the first file found:
 
 ### Authentication
 
-Either GH_TOKEN or GITHUB_TOKEN environment variables must be
-defined for individual check re-runs to work properly. Without
-proper authentication, re-run operations may fail. The variables
-can be set in the configuration file.
+The script requires a GitHub personal access token with `repo` scope set in either `GITHUB_TOKEN` or `GH_TOKEN` environment variable.
+
+You can set the token by:
+- Exporting it in your shell:
+  ```bash
+  export GITHUB_TOKEN="your_token_here"
+  ```
+- Adding it to your configuration file (`~/.pr-babysitter` or `~/.config/pr-babysitter`):
+  ```bash
+  GITHUB_TOKEN="your_token_here"
+  ```
 
 ## Options
 
 - `-f` - Only show failed checks, do not monitor
 - `-w SECONDS` - Wait time in seconds between checks (default: 300)
+- `-m REPO` - Monitor multiple PRs for the specified repository
 - `-r MODE` - Re-run mode for failed checks:
   - `ask` - Prompt for re-run option (default)
   - `check` - Re-run individual check runs
@@ -102,6 +112,13 @@ pr-babysitter -w 300 123                   # Monitor with 5 minute interval
 pr-babysitter -r workflow 123              # Auto re-run entire workflows
 pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs, show failed only
 pr-babysitter -r label:re-run 123          # Add 're-run' label to PR #12
+```
+
+### Multi-PR Monitoring
+
+```bash
+pr-babysitter -m owner/repo 123 456 789    # Monitor PRs 123, 456, 789
+pr-babysitter -w 60 -m owner/repo 123 456  # Monitor with 1-minute interval
 ```
 
 ### Direct Re-run
