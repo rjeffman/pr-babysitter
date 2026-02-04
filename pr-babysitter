@@ -28,6 +28,7 @@ usage() {
     echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
     echo "       pr-babysitter [OPTIONS] -c CHECK_ID [REPO]"
     echo "       pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]"
+    echo "       pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]"
     echo ""
     echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
     echo ""
@@ -55,6 +56,7 @@ usage() {
     echo "                  label:NAME  - Add specified label NAME to the PR"
     echo "  -c CHECK_ID   Directly re-run a specific check run by ID"
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
+    echo "  -m REPO       Monitor multiple PRs for the specified repository"
     echo "  -v            Enable verbose mode"
     echo "  -h            Show this help message"
     echo ""
@@ -71,6 +73,10 @@ usage() {
     echo "  pr-babysitter -r workflow 123              # Auto re-run entire workflows"
     echo "  pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs, show failed only"
     echo "  pr-babysitter -r label:re-run 123          # Add 're-run' label to PR #12"
+    echo ""
+    echo "  # Multi-PR Monitoring"
+    echo "  pr-babysitter -m owner/repo 123 456 789    # Monitor PRs 123, 456, 789"
+    echo "  pr-babysitter -w 60 -m owner/repo 123 456  # Monitor with 1-minute interval"
     echo ""
     echo "  # Direct Re-run"
     echo "  pr-babysitter -c 61523939520 owner/repo    # Re-run specific check run"
@@ -226,6 +232,38 @@ render_checks() {
          else \"❓\" end) as \$emoji |
         \"\\(\$emoji) \\(.name)\" +
         (if .state == \"FAILURE\" or .state == \"IN_PROGRESS\" then \"\\n\\(.link)\" else \"\" end)"
+}
+
+render_pr_summary() {
+    local pr_number="${1}"
+    local pr_title="${2}"
+    local pr_url="${3}"
+    local checks_json="${4}"
+
+    # Print PR number and title (first line)
+    echo "#${pr_number} ${pr_title}"
+
+    # Print PR URL (second line)
+    echo "${pr_url}"
+
+    # Print "Checks:" followed by emoji statuses (third line)
+    echo -n "Checks: "
+    jq -r \
+    "sort_by(
+        if .state == \"FAILURE\" then 1
+        elif .state == \"CANCELED\" then 2
+        elif .state == \"IN_PROGRESS\" then 3
+        elif .state == \"QUEUED\" then 4
+        elif .state == \"SUCCESS\" then 6
+        else 5 end
+    ) | .[] |
+        (if .state == \"SUCCESS\" then \"✅\"
+         elif .state == \"IN_PROGRESS\" then \"🔵\"
+         elif .state == \"QUEUED\" then \"🧵\"
+         elif .state == \"FAILURE\" then \"🚨\"
+         elif .state == \"CANCELED\" then \"✖️\"
+         else \"❓\" end)" <<<"${checks_json}" | tr '\n' ' '
+    echo ""
 }
 
 add_pr_label() {
@@ -396,6 +434,276 @@ rerun_github_action() {
     echo "Done."
 }
 
+monitor_multiple_prs() {
+    local repo="${1}"
+    shift
+    local pr_numbers=("$@")
+
+    echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+    echo ""
+
+    # Declare associative arrays to store PR data
+    declare -A pr_titles
+    declare -A pr_head_shas
+    declare -A pr_checks
+
+    while true; do
+        # First loop: Fetch all PR data
+        for pr_number in "${pr_numbers[@]}"; do
+            # Get PR title
+            pr_titles["${pr_number}"]=$(get_pr_title "${pr_number}" "${repo}" 2>/dev/null || echo "")
+
+            if [ -z "${pr_titles[${pr_number}]}" ]; then
+                pr_head_shas["${pr_number}"]=""
+                pr_checks["${pr_number}"]=""
+                continue
+            fi
+
+            # Get latest commit SHA
+            pr_head_shas["${pr_number}"]=$(get_pr_head_sha "${pr_number}" "${repo}" 2>/dev/null || echo "")
+
+            if [ -z "${pr_head_shas[${pr_number}]}" ]; then
+                pr_checks["${pr_number}"]=""
+                continue
+            fi
+
+            # Get check status
+            pr_checks["${pr_number}"]=$(get_check_runs "${repo}" "${pr_head_shas[${pr_number}]}" 2>/dev/null || echo "")
+        done
+
+        # Clear screen for clean output
+        clear
+
+        echo "=================================================="
+        echo "Multi-PR Monitor - ${repo}"
+        echo "=================================================="
+        echo ""
+
+        # Second loop: Display all PR statuses
+        for pr_number in "${pr_numbers[@]}"; do
+            # Check if we have PR title
+            if [ -z "${pr_titles[${pr_number}]}" ]; then
+                echo "#${pr_number} (Error: Could not retrieve PR)"
+                echo ""
+                continue
+            fi
+
+            # Check if we have HEAD SHA
+            if [ -z "${pr_head_shas[${pr_number}]}" ]; then
+                echo "#${pr_number} ${pr_titles[${pr_number}]}"
+                echo "https://github.com/${repo}/pull/${pr_number}"
+                echo "Checks: ❓ (Error: Could not retrieve checks)"
+                echo ""
+                continue
+            fi
+
+            # Check if we have checks data
+            if [ -z "${pr_checks[${pr_number}]}" ] || [ "${pr_checks[${pr_number}]}" = "null" ]; then
+                echo "#${pr_number} ${pr_titles[${pr_number}]}"
+                echo "https://github.com/${repo}/pull/${pr_number}"
+                echo "Checks: ❓ (No checks found)"
+                echo ""
+                continue
+            fi
+
+            # Render PR summary
+            render_pr_summary "${pr_number}" "${pr_titles[${pr_number}]}" "https://github.com/${repo}/pull/${pr_number}" "${pr_checks[${pr_number}]}"
+            echo ""
+        done
+
+        echo "-----------------------------------"
+        # shellcheck disable=SC2312
+        echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
+
+        # Check overall status across all PRs
+        local has_restartable_failures=false
+        local all_checks_successful=true
+
+        for pr_number in "${pr_numbers[@]}"; do
+            if [ -n "${pr_checks[${pr_number}]}" ] && [ "${pr_checks[${pr_number}]}" != "null" ]; then
+                local failed_count
+                local active_count
+                local success_count
+                local total_count
+                failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${pr_checks[${pr_number}]}")
+                active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${pr_checks[${pr_number}]}")
+                success_count=$(jq "[.[] | select(.state == \"SUCCESS\")] | length" <<<"${pr_checks[${pr_number}]}")
+                total_count=$(jq "length" <<<"${pr_checks[${pr_number}]}")
+
+                # Check if this PR has failed checks with no active checks
+                if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
+                    has_restartable_failures=true
+                fi
+
+                # Check if this PR has all checks successful
+                if [ "${total_count}" -eq 0 ] || [ "${success_count}" -ne "${total_count}" ]; then
+                    all_checks_successful=false
+                fi
+            else
+                # No checks or error retrieving checks
+                all_checks_successful=false
+            fi
+        done
+
+        # If all checks across all PRs are successful, exit monitoring
+        if [ "${all_checks_successful}" = true ]; then
+            echo ""
+            echo "✅ All checks passed successfully for all monitored PRs!"
+            echo "Monitoring stopped."
+            echo "-----------------------------------"
+            exit 0
+        fi
+
+        if [ "${has_restartable_failures}" = true ]; then
+            echo "Press 'R' to restart failed checks, or wait for auto-refresh..."
+            echo "Press Ctrl+C to stop monitoring"
+            echo "-----------------------------------"
+
+            # Wait for input with timeout
+            if read -t "${WAIT_TIME}" -n 1 -s -r key; then
+                if [[ "${key}" == "R" ]] || [[ "${key}" == "r" ]]; then
+                    # Clear screen before showing restart options
+                    clear
+
+                    echo "=================================================="
+                    echo "Restart Failed Checks"
+                    echo "=================================================="
+
+                    # Re-run failed checks for each PR that has failures
+                    for pr_number in "${pr_numbers[@]}"; do
+                        if [ -n "${pr_checks[${pr_number}]}" ] && [ "${pr_checks[${pr_number}]}" != "null" ]; then
+                            local failed_count
+                            local active_count
+                            failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${pr_checks[${pr_number}]}")
+                            active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${pr_checks[${pr_number}]}")
+
+                            if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
+                                echo ""
+                                echo "=================================================="
+                                # Display PR title (folded to 72 characters)
+                                fold -w 72 -s <<<"${pr_titles[${pr_number}]}"
+                                echo "https://github.com/${repo}/pull/${pr_number}"
+                                echo "PR #${pr_number} - Check Status"
+                                echo "=================================================="
+                                echo ""
+
+                                # Display detailed check status
+                                render_checks <<<"${pr_checks[${pr_number}]}"
+
+                                echo ""
+                                echo "-----------------------------------"
+
+                                # Ask user how to restart this PR's checks
+                                echo ""
+                                echo "Re-run options for PR #${pr_number}:"
+                                echo "  1) Re-run individual check runs (default)"
+                                echo "  2) Re-run entire workflow runs (all jobs)"
+                                echo "  3) Re-run only failed jobs in workflows"
+                                echo "  4) Add a label to re-run checks"
+                                echo "  s) Skip this PR"
+                                echo ""
+                                read -p "Select option (1-4, s): " -n 1 -r
+                                echo ""
+
+                                case ${REPLY} in
+                                    1|"")
+                                        echo ""
+                                        echo "Re-running individual check runs..."
+                                        jq -r '[.[] | select(.state == "FAILURE" or .state == "CANCELED")] | .[] | "\(.id)|\(.name)"' <<<"${pr_checks[${pr_number}]}" | \
+                                        while IFS='|' read -r check_id check_name; do
+                                            echo "  Requesting re-run for: ${check_name}"
+                                            rerun_check "${repo}" "${check_id}" || true
+                                        done
+                                        echo "Done."
+                                        ;;
+                                    2)
+                                        echo ""
+                                        echo "Re-running entire workflow runs..."
+                                        FAILED_GA_CHECKS=$(jq -r '[.[] | select(.state == "FAILURE" or .state == "CANCELED") | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)' <<<"${pr_checks[${pr_number}]}")
+
+                                        # shellcheck disable=SC2312
+                                        if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
+                                            echo "  No GitHub Actions workflows to re-run"
+                                        else
+                                            # shellcheck disable=SC2034
+                                            jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
+                                            while IFS='|' read -r check_id check_name app_name; do
+                                                echo "  Finding workflow run for: ${check_name}"
+                                                run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
+
+                                                if [ -n "${run_id}" ]; then
+                                                    echo "    Re-running workflow run ${run_id}..."
+                                                    rerun_workflow_run "${repo}" "${run_id}" || true
+                                                else
+                                                    echo "    Warning: Could not find workflow run ID"
+                                                fi
+                                            done
+                                        fi
+                                        echo "Done."
+                                        ;;
+                                    3)
+                                        echo ""
+                                        echo "Re-running only failed jobs in workflows..."
+                                        FAILED_GA_CHECKS=$(jq -r '[.[] | select(.state == "FAILURE" or .state == "CANCELED") | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)' <<<"${pr_checks[${pr_number}]}")
+
+                                        # shellcheck disable=SC2312
+                                        if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
+                                            echo "  No GitHub Actions workflows to re-run"
+                                        else
+                                            # shellcheck disable=SC2034
+                                            jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
+                                            while IFS='|' read -r check_id check_name app_name; do
+                                                echo "  Finding workflow run for: ${check_name}"
+                                                run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
+
+                                                if [ -n "${run_id}" ]; then
+                                                    echo "    Re-running failed jobs in workflow run ${run_id}..."
+                                                    rerun_failed_jobs "${repo}" "${run_id}" || true
+                                                else
+                                                    echo "    Warning: Could not find workflow run ID"
+                                                fi
+                                            done
+                                        fi
+                                        echo "Done."
+                                        ;;
+                                    4)
+                                        echo ""
+                                        IFS= read -p "Label name: " -r LABEL_NAME
+                                        echo "Adding label '${LABEL_NAME}' to PR #${pr_number}..."
+                                        if add_pr_label "${repo}" "${pr_number}" "${LABEL_NAME}"; then
+                                            echo "  Successfully added label '${LABEL_NAME}'"
+                                        else
+                                            echo "  Failed to add label"
+                                        fi
+                                        ;;
+                                    [Ss])
+                                        echo "Skipping PR #${pr_number}."
+                                        ;;
+                                    *)
+                                        echo "Invalid option. Skipping PR #${pr_number}."
+                                        ;;
+                                esac
+                            fi
+                        fi
+                    done
+
+                    echo ""
+                    echo "Re-run requests completed."
+                    echo ""
+                    echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                    echo ""
+                fi
+            fi
+        else
+            echo "Press Ctrl+C to stop monitoring"
+            echo "-----------------------------------"
+
+            # Wait before next check
+            sleep "${WAIT_TIME}"
+        fi
+    done
+}
+
 check_dependencies() {
     MISSING=0
 
@@ -442,11 +750,13 @@ RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
 LABEL_NAME=""     # Label name to add to PR when using label mode
 CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
+MULTI_PR_MODE=false  # Multi-PR monitoring mode
+MULTI_PR_REPO=""     # Repository for multi-PR mode
 
 NOTIFY="${NOTIFY:-":"}"
 
 # Parse options
-while getopts "fw:r:c:W:vh" opt; do
+while getopts "fw:r:c:W:m:vh" opt; do
     case ${opt} in
         f)
             FAILED_ONLY=true
@@ -491,6 +801,15 @@ while getopts "fw:r:c:W:vh" opt; do
             fi
             WORKFLOW_ID="${OPTARG}"
             ;;
+        m)
+            MULTI_PR_MODE=true
+            MULTI_PR_REPO="${OPTARG}"
+            # Validate REPO format (owner/repo)
+            if ! [[ "${MULTI_PR_REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
+                echo "Error: REPO must be in owner/repo format"
+                exit 1
+            fi
+            ;;
         v)
             VERBOSE="YES"
             ;;
@@ -506,7 +825,28 @@ done
 shift $((OPTIND - 1))
 
 # Parse arguments based on mode
-if [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
+if [ "${MULTI_PR_MODE}" = true ]; then
+    # Multi-PR monitoring mode: PR numbers are positional arguments
+    if [ $# -lt 1 ]; then
+        echo "Error: At least one PR_NUMBER required for multi-PR mode"
+        usage
+    fi
+
+    # Collect all PR numbers from positional arguments
+    MULTI_PR_NUMBERS=()
+    for arg in "$@"; do
+        # Validate each PR_NUMBER is numeric
+        if ! [[ "${arg}" =~ ^[0-9]+$ ]]; then
+            echo "Error: PR_NUMBER must be a positive integer: ${arg}"
+            exit 1
+        fi
+        MULTI_PR_NUMBERS+=("${arg}")
+    done
+
+    # Call multi-PR monitoring function and exit
+    monitor_multiple_prs "${MULTI_PR_REPO}" "${MULTI_PR_NUMBERS[@]}"
+    exit 0
+elif [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
     # Direct re-run mode: only REPO is required
     REPO="${1:-}"
     PR_NUMBER=""
