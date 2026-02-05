@@ -259,6 +259,12 @@ get_pr_title() {
     gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
 }
 
+get_pr_labels() {
+    local pr_number="${1}"
+    local repo="${2}"
+    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '[.labels[].name] | join(", ")'
+}
+
 get_check_runs() {
     local repo="${1}"
     local ref="${2}"
@@ -401,16 +407,22 @@ render_checks() {
 render_pr_summary() {
     local pr_number="${1}"
     local pr_title="${2}"
-    local pr_url="${3}"
-    local checks_json="${4}"
+    local pr_labels="${3}"
+    local pr_url="${4}"
+    local checks_json="${5}"
 
     # Print PR number and title (first line)
     echo "#${pr_number} ${pr_title}"
 
-    # Print PR URL (second line)
+    # Print PR labels (second line, only if labels exist)
+    if [ -n "${pr_labels}" ]; then
+        echo "Labels: ${pr_labels}"
+    fi
+
+    # Print PR URL (next line)
     echo "${pr_url}"
 
-    # Print "Checks:" followed by emoji statuses (third line)
+    # Print "Checks:" followed by emoji statuses (next line)
     echo -n "Checks: "
     jq -r \
     "sort_by(
@@ -620,6 +632,7 @@ monitor_multiple_prs() {
 
     # Declare associative arrays to store PR data
     declare -A pr_titles
+    declare -A pr_labels
     declare -A pr_head_shas
     declare -A pr_checks
 
@@ -630,10 +643,14 @@ monitor_multiple_prs() {
             pr_titles["${pr_number}"]=$(get_pr_title "${pr_number}" "${repo}" 2>/dev/null || echo "")
 
             if [ -z "${pr_titles[${pr_number}]}" ]; then
+                pr_labels["${pr_number}"]=""
                 pr_head_shas["${pr_number}"]=""
                 pr_checks["${pr_number}"]=""
                 continue
             fi
+
+            # Get PR labels
+            pr_labels["${pr_number}"]=$(get_pr_labels "${pr_number}" "${repo}" 2>/dev/null || echo "")
 
             # Get latest commit SHA
             pr_head_shas["${pr_number}"]=$(get_pr_head_sha "${pr_number}" "${repo}" 2>/dev/null || echo "")
@@ -666,8 +683,10 @@ monitor_multiple_prs() {
 
             # Check if we have HEAD SHA
             if [ -z "${pr_head_shas[${pr_number}]}" ]; then
+                local pr_url
+                pr_url=$(get_pr_url "${repo}" "${pr_number}")
                 echo "#${pr_number} ${pr_titles[${pr_number}]}"
-                echo "https://github.com/${repo}/pull/${pr_number}"
+                echo "${pr_url}"
                 echo "Checks: ❓ (Error: Could not retrieve checks)"
                 echo ""
                 continue
@@ -675,15 +694,19 @@ monitor_multiple_prs() {
 
             # Check if we have checks data
             if [ -z "${pr_checks[${pr_number}]}" ] || [ "${pr_checks[${pr_number}]}" = "null" ]; then
+                local pr_url
+                pr_url=$(get_pr_url "${repo}" "${pr_number}")
                 echo "#${pr_number} ${pr_titles[${pr_number}]}"
-                echo "https://github.com/${repo}/pull/${pr_number}"
+                echo "${pr_url}"
                 echo "Checks: ❓ (No checks found)"
                 echo ""
                 continue
             fi
 
             # Render PR summary
-            render_pr_summary "${pr_number}" "${pr_titles[${pr_number}]}" "https://github.com/${repo}/pull/${pr_number}" "${pr_checks[${pr_number}]}"
+            local pr_url
+            pr_url=$(get_pr_url "${repo}" "${pr_number}")
+            render_pr_summary "${pr_number}" "${pr_titles[${pr_number}]}" "${pr_labels[${pr_number}]}" "${pr_url}" "${pr_checks[${pr_number}]}"
             echo ""
         done
 
@@ -758,7 +781,13 @@ monitor_multiple_prs() {
                                 echo "=================================================="
                                 # Display PR title (folded to 72 characters)
                                 fold -w 72 -s <<<"PR #${pr_number} - ${pr_titles[${pr_number}]}"
-                                echo "https://github.com/${repo}/pull/${pr_number}"
+                                # Display labels if any
+                                if [ -n "${pr_labels[${pr_number}]}" ]; then
+                                    echo "Labels: ${pr_labels[${pr_number}]}"
+                                fi
+                                local pr_url
+                                pr_url=$(get_pr_url "${repo}" "${pr_number}")
+                                echo "${pr_url}"
                                 echo "=================================================="
                                 echo ""
 
@@ -1145,6 +1174,9 @@ if [ -z "${PR_TITLE}" ]; then
     PR_TITLE="PR #${PR_NUMBER}"
 fi
 
+# Get the PR labels
+PR_LABELS=$(get_pr_labels "${PR_NUMBER}" "${REPO}")
+
 # ANSI color codes
 # shellcheck disable=SC2034
 WHITE="\033[1;37m"
@@ -1166,6 +1198,15 @@ if [ "${FAILED_ONLY}" = true ]; then
     echo "========================================"
     echo "Failed Checks for PR #${PR_NUMBER}"
     echo "========================================"
+    echo ""
+    # Display PR title
+    echo "PR #${PR_NUMBER} - ${PR_TITLE}"
+    # Display labels if any
+    if [ -n "${PR_LABELS}" ]; then
+        echo "Labels: ${PR_LABELS}"
+    fi
+    PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
+    echo "${PR_URL}"
     echo ""
     render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"' <<<"${CHECKS_JSON}"
     send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
@@ -1190,7 +1231,12 @@ while true; do
     echo "=================================================="
     # Display PR title (folded to 72 characters)
     fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}"
-    echo "https://github.com/${REPO}/pull/${PR_NUMBER}"
+    # Display labels if any
+    if [ -n "${PR_LABELS}" ]; then
+        echo "Labels: ${PR_LABELS}"
+    fi
+    PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
+    echo "${PR_URL}"
     echo "=================================================="
     echo ""
 
