@@ -28,3 +28,6 @@ Follow the restrictions on the file `.gitignore` and **never** commit any of thi
 - **MANDATORY**: No line on the commit message must have more than 72 characters.
 - **MANDATORY**: Always add "Assisted-by: AGENT IDENTIFICATION <AGENT E-MAIL>"
 - **MANDATORY**: Always commit with '-s/--signoff'
+- Each commit should represent a single, logical change
+- Use bullet points for multiple changes.
+- **ALWAYS** add a bullet list of the prompts used to generate the change being commited.- **NEVER** add promps like "commit changes" to the list of prompts.
