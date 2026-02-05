@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Version
+readonly VERSION="1.0.2"
+
 # GitHub API constants
 readonly GITHUB_API_VERSION="2022-11-28"
 readonly GITHUB_ACCEPT_HEADER="application/vnd.github+json"
@@ -45,6 +48,7 @@ usage() {
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
     echo "  -m REPO       Monitor multiple PRs for the specified repository"
     echo "  -v            Enable verbose mode"
+    echo "  -V            Show version and exit"
     echo "  -h            Show this help message"
     echo ""
     echo "Arguments:"
@@ -931,7 +935,7 @@ MULTI_PR_REPO=""     # Repository for multi-PR mode
 NOTIFY="${NOTIFY:-":"}"
 
 # Parse options
-while getopts "fw:s:r:c:W:m:vh" opt; do
+while getopts "fw:s:r:c:W:m:vVh" opt; do
     case ${opt} in
         f)
             FAILED_ONLY=true
@@ -990,6 +994,10 @@ while getopts "fw:s:r:c:W:m:vh" opt; do
             ;;
         v)
             VERBOSE="YES"
+            ;;
+        V)
+            echo "pr-babysitter version ${VERSION}"
+            exit 0
             ;;
         h)
             usage
