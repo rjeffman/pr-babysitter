@@ -30,4 +30,5 @@ Follow the restrictions on the file `.gitignore` and **never** commit any of thi
 - **MANDATORY**: Always commit with '-s/--signoff'
 - Each commit should represent a single, logical change
 - Use bullet points for multiple changes.
-- **ALWAYS** add a bullet list of the prompts used to generate the change being commited.- **NEVER** add promps like "commit changes" to the list of prompts.
+- **ALWAYS** add a bullet list of the prompts used to generate the change being commited.
+- **NEVER** add promps like "commit changes" to the list of prompts.
