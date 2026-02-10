@@ -65,6 +65,43 @@ Desktop notifications will be sent when checks fail (if available).
 - **Codeberg** (codeberg.org) - Monitoring only (no re-run support)
 - **Custom Gitea/Forgejo** - Monitoring only (no re-run support)
 
+## PR Status Indicators
+
+### Eyes Emoji 👀
+
+When monitoring a PR, an eyes emoji (👀) appears after the PR title to indicate that the PR has received a recent push that may need review attention.
+
+**The 👀 emoji appears when:**
+- The last push to the PR is more recent than the last updated comment from someone other than the PR author
+- This indicates that code has been updated since the last time a reviewer or collaborator commented on the PR
+
+**The 👀 emoji does NOT appear when:**
+- No non-author comments exist on the PR
+- The most recent comment update from others is newer than the last push
+- The PR author's own comments don't count (only comments from reviewers/collaborators matter)
+
+**Display format:**
+```
+PR #123 - Feature: Add new authentication system 👀
+Labels: enhancement, needs-review
+https://github.com/owner/repo/pull/123
+Last push: 2026-02-10 14:30:25
+Checks: 🔵 🔵 ✅ ✅
+```
+
+This helps identify PRs where reviewers should take another look because new changes have been pushed since they last engaged with the PR.
+
+### Check Status Emojis
+
+The tool uses emoji indicators to show the status of CI/CD checks:
+
+- ✅ **Success** - Check passed successfully
+- 🔵 **In Progress** - Check is currently running
+- 🧵 **Queued** - Check is waiting to start
+- 🚨 **Failure** - Check failed
+- ✖️ **Canceled** - Check was canceled
+- ❓ **Unknown** - Check status is unknown or could not be determined
+
 ## Configuration
 
 The script will source configuration from the first file found:

@@ -226,6 +226,97 @@ get_pr_title() {
     gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
 }
 
+get_pr_author() {
+    local pr_number="${1}"
+    local repo="${2}"
+    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login'
+}
+
+format_timestamp() {
+    local iso8601_timestamp="${1}"
+
+    if [ -z "${iso8601_timestamp}" ] || [ "${iso8601_timestamp}" = "null" ]; then
+        echo ""
+        return
+    fi
+
+    # Convert ISO 8601 to YYYY-MM-DD HH:MM:SS format
+    date -d "${iso8601_timestamp}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo ""
+}
+
+get_pr_head_commit_timestamp() {
+    local pr_number="${1}"
+    local repo="${2}"
+    local sha="${3}"
+
+    local iso_timestamp
+    iso_timestamp=$(gh_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
+
+    format_timestamp "${iso_timestamp}"
+}
+
+get_pr_comments() {
+    local pr_number="${1}"
+    local repo="${2}"
+
+    # Fetch both issue comments and review comments
+    local issue_comments
+    local review_comments
+
+    issue_comments=$(gh_api_get "/repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
+    review_comments=$(gh_api_get "/repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
+
+    # Combine both arrays into a single array
+    jq -n --argjson ic "${issue_comments}" --argjson rc "${review_comments}" '$ic + $rc'
+}
+
+get_latest_non_author_comment_timestamp() {
+    local pr_number="${1}"
+    local repo="${2}"
+    local pr_author="${3}"
+
+    if [ -z "${pr_author}" ]; then
+        echo ""
+        return
+    fi
+
+    local comments
+    comments=$(get_pr_comments "${pr_number}" "${repo}")
+
+    # Filter out author's comments and get the most recent updated_at timestamp
+    local latest_timestamp
+    latest_timestamp=$(jq -r --arg author "${pr_author}" \
+        '[.[] | select(.user.login != $author) | .updated_at] | sort | reverse | .[0] // ""' \
+        <<<"${comments}")
+
+    format_timestamp "${latest_timestamp}"
+}
+
+should_add_eyes_emoji() {
+    local push_timestamp="${1}"
+    local latest_comment_timestamp="${2}"
+
+    # If no push timestamp, don't add emoji
+    if [ -z "${push_timestamp}" ]; then
+        return 1
+    fi
+
+    # If no non-author comments exist, don't add emoji
+    if [ -z "${latest_comment_timestamp}" ]; then
+        return 1
+    fi
+
+    # Convert both timestamps to Unix epoch for comparison
+    local push_epoch
+    local comment_epoch
+
+    push_epoch=$(date -d "${push_timestamp}" '+%s' 2>/dev/null || echo "0")
+    comment_epoch=$(date -d "${latest_comment_timestamp}" '+%s' 2>/dev/null || echo "0")
+
+    # Return 0 (true) if push is more recent than latest comment
+    [ "${push_epoch}" -gt "${comment_epoch}" ]
+}
+
 get_pr_labels() {
     local pr_number="${1}"
     local repo="${2}"
@@ -377,17 +468,24 @@ render_pr_summary() {
     local pr_labels="${3}"
     local pr_url="${4}"
     local checks_json="${5}"
+    local eyes_emoji="${6}"
+    local push_timestamp="${7}"
 
-    # Print PR number and title (first line)
-    echo "#${pr_number} ${pr_title}"
+    # Print PR number and title with eyes emoji if applicable (first line)
+    echo "#${pr_number} ${pr_title}${eyes_emoji}"
 
-    # Print PR labels (second line, only if labels exist)
+    # Print PR labels (next line, only if labels exist)
     if [ -n "${pr_labels}" ]; then
         echo "Labels: ${pr_labels}"
     fi
 
     # Print PR URL (next line)
     echo "${pr_url}"
+
+    # Print last push timestamp (after URL, only if available)
+    if [ -n "${push_timestamp}" ]; then
+        echo "Last push: ${push_timestamp}"
+    fi
 
     # Print "Checks:" followed by emoji statuses (next line)
     echo -n "Checks: "
@@ -602,6 +700,9 @@ monitor_multiple_prs() {
     declare -A pr_labels
     declare -A pr_head_shas
     declare -A pr_checks
+    declare -A pr_authors
+    declare -A pr_push_timestamps
+    declare -A pr_eyes_emojis
 
     while true; do
         # First loop: Fetch all PR data
@@ -629,6 +730,22 @@ monitor_multiple_prs() {
 
             # Get check status
             pr_checks["${pr_number}"]=$(get_check_runs "${repo}" "${pr_head_shas[${pr_number}]}" 2>/dev/null || echo "")
+
+            # Get PR author
+            pr_authors["${pr_number}"]=$(get_pr_author "${pr_number}" "${repo}" 2>/dev/null || echo "")
+
+            # Get push timestamp
+            pr_push_timestamps["${pr_number}"]=$(get_pr_head_commit_timestamp "${pr_number}" "${repo}" "${pr_head_shas[${pr_number}]}" 2>/dev/null || echo "")
+
+            # Calculate eyes emoji
+            pr_eyes_emojis["${pr_number}"]=""
+            if [ -n "${pr_authors[${pr_number}]}" ] && [ -n "${pr_push_timestamps[${pr_number}]}" ]; then
+                local latest_comment_timestamp
+                latest_comment_timestamp=$(get_latest_non_author_comment_timestamp "${pr_number}" "${repo}" "${pr_authors[${pr_number}]}" 2>/dev/null || echo "")
+                if should_add_eyes_emoji "${pr_push_timestamps[${pr_number}]}" "${latest_comment_timestamp}"; then
+                    pr_eyes_emojis["${pr_number}"]=" 👀"
+                fi
+            fi
         done
 
         # Clear screen for clean output
@@ -673,7 +790,7 @@ monitor_multiple_prs() {
             # Render PR summary
             local pr_url
             pr_url=$(get_pr_url "${repo}" "${pr_number}")
-            render_pr_summary "${pr_number}" "${pr_titles[${pr_number}]}" "${pr_labels[${pr_number}]}" "${pr_url}" "${pr_checks[${pr_number}]}"
+            render_pr_summary "${pr_number}" "${pr_titles[${pr_number}]}" "${pr_labels[${pr_number}]}" "${pr_url}" "${pr_checks[${pr_number}]}" "${pr_eyes_emojis[${pr_number}]}" "${pr_push_timestamps[${pr_number}]}"
             echo ""
         done
 
@@ -1148,6 +1265,9 @@ fi
 # Get the PR labels
 PR_LABELS=$(get_pr_labels "${PR_NUMBER}" "${REPO}")
 
+# Get the PR author
+PR_AUTHOR=$(get_pr_author "${PR_NUMBER}" "${REPO}")
+
 # ANSI color codes
 # shellcheck disable=SC2034
 WHITE="\033[1;37m"
@@ -1166,18 +1286,30 @@ if [ "${FAILED_ONLY}" = true ]; then
         exit 0
     fi
 
+    # Get push timestamp and eyes emoji for failed-only mode
+    PR_PUSH_TIMESTAMP=$(get_pr_head_commit_timestamp "${PR_NUMBER}" "${REPO}" "${PR_HEAD_SHA}")
+    LATEST_COMMENT_TIMESTAMP=$(get_latest_non_author_comment_timestamp "${PR_NUMBER}" "${REPO}" "${PR_AUTHOR}")
+    EYES_EMOJI=""
+    if should_add_eyes_emoji "${PR_PUSH_TIMESTAMP}" "${LATEST_COMMENT_TIMESTAMP}"; then
+        EYES_EMOJI=" 👀"
+    fi
+
     echo "========================================"
     echo "Failed Checks for PR #${PR_NUMBER}"
     echo "========================================"
     echo ""
-    # Display PR title
-    echo "PR #${PR_NUMBER} - ${PR_TITLE}"
+    # Display PR title with eyes emoji
+    echo "PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
     # Display labels if any
     if [ -n "${PR_LABELS}" ]; then
         echo "Labels: ${PR_LABELS}"
     fi
     PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
     echo "${PR_URL}"
+    # Display last push timestamp
+    if [ -n "${PR_PUSH_TIMESTAMP}" ]; then
+        echo "Last push: ${PR_PUSH_TIMESTAMP}"
+    fi
     echo ""
     render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"' <<<"${CHECKS_JSON}"
     send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
@@ -1200,19 +1332,38 @@ while true; do
     clear
 
     echo "=================================================="
-    # Display PR title (folded to 72 characters)
-    fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}"
+
+    # Get latest commit SHA (in case there are new commits)
+    PR_HEAD_SHA=$(get_pr_head_sha "${PR_NUMBER}" "${REPO}")
+
+    # Get push timestamp
+    PR_PUSH_TIMESTAMP=$(get_pr_head_commit_timestamp "${PR_NUMBER}" "${REPO}" "${PR_HEAD_SHA}")
+
+    # Get latest non-author comment timestamp
+    LATEST_COMMENT_TIMESTAMP=$(get_latest_non_author_comment_timestamp "${PR_NUMBER}" "${REPO}" "${PR_AUTHOR}")
+
+    # Calculate eyes emoji
+    EYES_EMOJI=""
+    if should_add_eyes_emoji "${PR_PUSH_TIMESTAMP}" "${LATEST_COMMENT_TIMESTAMP}"; then
+        EYES_EMOJI=" 👀"
+    fi
+
+    # Display PR title with eyes emoji (folded to 72 characters)
+    fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+
     # Display labels if any
     if [ -n "${PR_LABELS}" ]; then
         echo "Labels: ${PR_LABELS}"
     fi
     PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
     echo "${PR_URL}"
+
+    # Display last push timestamp
+    if [ -n "${PR_PUSH_TIMESTAMP}" ]; then
+        echo "Last push: ${PR_PUSH_TIMESTAMP}"
+    fi
     echo "=================================================="
     echo ""
-
-    # Get latest commit SHA (in case there are new commits)
-    PR_HEAD_SHA=$(get_pr_head_sha "${PR_NUMBER}" "${REPO}")
 
     # Get check status
     CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}")
