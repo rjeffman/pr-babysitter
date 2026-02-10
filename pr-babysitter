@@ -134,7 +134,7 @@ get_repo_from_git() {
     local remote_url
     remote_url=$(git remote get-url origin 2>/dev/null || echo "")
 
-    if [ -z "${remote_url}" ]; then
+    if [ -z "${remote_url:-}" ]; then
         return 1
     fi
 
@@ -164,7 +164,7 @@ gh_api_get() {
             local token
             token=$(get_api_token)
 
-            if [ -z "${token}" ]; then
+            if [ -z "${token:-}" ]; then
                 echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
                 return 1
             fi
@@ -195,7 +195,7 @@ gh_api_post() {
             local token
             token=$(get_api_token)
 
-            if [ -z "${token}" ]; then
+            if [ -z "${token:-}" ]; then
                 echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
                 return 1
             fi
@@ -235,7 +235,7 @@ get_pr_author() {
 format_timestamp() {
     local iso8601_timestamp="${1}"
 
-    if [ -z "${iso8601_timestamp}" ] || [ "${iso8601_timestamp}" = "null" ]; then
+    if [ "${iso8601_timestamp:-null}" = "null" ]; then
         echo ""
         return
     fi
@@ -275,7 +275,7 @@ get_latest_non_author_comment_timestamp() {
     local repo="${2}"
     local pr_author="${3}"
 
-    if [ -z "${pr_author}" ]; then
+    if [ -z "${pr_author:-}" ]; then
         echo ""
         return
     fi
@@ -297,12 +297,12 @@ should_add_eyes_emoji() {
     local latest_comment_timestamp="${2}"
 
     # If no push timestamp, don't add emoji
-    if [ -z "${push_timestamp}" ]; then
+    if [ -z "${push_timestamp:-}" ]; then
         return 1
     fi
 
     # If no non-author comments exist, don't add emoji
-    if [ -z "${latest_comment_timestamp}" ]; then
+    if [ -z "${latest_comment_timestamp:-}" ]; then
         return 1
     fi
 
@@ -475,7 +475,7 @@ render_pr_summary() {
     echo "#${pr_number} ${pr_title}${eyes_emoji}"
 
     # Print PR labels (next line, only if labels exist)
-    if [ -n "${pr_labels}" ]; then
+    if [ -n "${pr_labels:-}" ]; then
         echo "Labels: ${pr_labels}"
     fi
 
@@ -483,7 +483,7 @@ render_pr_summary() {
     echo "${pr_url}"
 
     # Print last push timestamp (after URL, only if available)
-    if [ -n "${push_timestamp}" ]; then
+    if [ -n "${push_timestamp:-}" ]; then
         echo "Last push: ${push_timestamp}"
     fi
 
@@ -630,7 +630,7 @@ rerun_github_action() {
                     echo "  Finding workflow run for: ${check_name}"
                     run_id=$(get_workflow_run_id_from_check "${REPO}" "${check_id}")
 
-                    if [ -n "${run_id}" ]; then
+                    if [ -n "${run_id:-}" ]; then
                         echo "    Re-running workflow run ${run_id}..."
                         rerun_workflow_run "${REPO}" "${run_id}" || true
                     else
@@ -655,7 +655,7 @@ rerun_github_action() {
                     echo "  Finding workflow run for: ${check_name}"
                     run_id=$(get_workflow_run_id_from_check "${REPO}" "${check_id}")
 
-                    if [ -n "${run_id}" ]; then
+                    if [ -n "${run_id:-}" ]; then
                         echo "    Re-running failed jobs in workflow run ${run_id}..."
                         rerun_failed_jobs "${REPO}" "${run_id}" || true
                     else
@@ -710,7 +710,7 @@ monitor_multiple_prs() {
             # Get PR title
             pr_titles["${pr_number}"]=$(get_pr_title "${pr_number}" "${repo}" 2>/dev/null || echo "")
 
-            if [ -z "${pr_titles[${pr_number}]}" ]; then
+            if [ -z "${pr_titles[${pr_number}]:-}" ]; then
                 pr_labels["${pr_number}"]=""
                 pr_head_shas["${pr_number}"]=""
                 pr_checks["${pr_number}"]=""
@@ -723,7 +723,7 @@ monitor_multiple_prs() {
             # Get latest commit SHA
             pr_head_shas["${pr_number}"]=$(get_pr_head_sha "${pr_number}" "${repo}" 2>/dev/null || echo "")
 
-            if [ -z "${pr_head_shas[${pr_number}]}" ]; then
+            if [ -z "${pr_head_shas[${pr_number}]:-}" ]; then
                 pr_checks["${pr_number}"]=""
                 continue
             fi
@@ -739,7 +739,7 @@ monitor_multiple_prs() {
 
             # Calculate eyes emoji
             pr_eyes_emojis["${pr_number}"]=""
-            if [ -n "${pr_authors[${pr_number}]}" ] && [ -n "${pr_push_timestamps[${pr_number}]}" ]; then
+            if [ -n "${pr_authors[${pr_number}]:-}" ] && [ -n "${pr_push_timestamps[${pr_number}]:-}" ]; then
                 local latest_comment_timestamp
                 latest_comment_timestamp=$(get_latest_non_author_comment_timestamp "${pr_number}" "${repo}" "${pr_authors[${pr_number}]}" 2>/dev/null || echo "")
                 if should_add_eyes_emoji "${pr_push_timestamps[${pr_number}]}" "${latest_comment_timestamp}"; then
@@ -759,14 +759,14 @@ monitor_multiple_prs() {
         # Second loop: Display all PR statuses
         for pr_number in "${pr_numbers[@]}"; do
             # Check if we have PR title
-            if [ -z "${pr_titles[${pr_number}]}" ]; then
+            if [ -z "${pr_titles[${pr_number}]:-}" ]; then
                 echo "#${pr_number} (Error: Could not retrieve PR)"
                 echo ""
                 continue
             fi
 
             # Check if we have HEAD SHA
-            if [ -z "${pr_head_shas[${pr_number}]}" ]; then
+            if [ -z "${pr_head_shas[${pr_number}]:-}" ]; then
                 local pr_url
                 pr_url=$(get_pr_url "${repo}" "${pr_number}")
                 echo "#${pr_number} ${pr_titles[${pr_number}]}"
@@ -777,7 +777,7 @@ monitor_multiple_prs() {
             fi
 
             # Check if we have checks data
-            if [ -z "${pr_checks[${pr_number}]}" ] || [ "${pr_checks[${pr_number}]}" = "null" ]; then
+            if [ "${pr_checks[${pr_number}]:-null}" = "null" ]; then
                 local pr_url
                 pr_url=$(get_pr_url "${repo}" "${pr_number}")
                 echo "#${pr_number} ${pr_titles[${pr_number}]}"
@@ -803,7 +803,7 @@ monitor_multiple_prs() {
         local all_checks_successful=true
 
         for pr_number in "${pr_numbers[@]}"; do
-            if [ -n "${pr_checks[${pr_number}]}" ] && [ "${pr_checks[${pr_number}]}" != "null" ]; then
+            if [ "${pr_checks[${pr_number}]:-null}" != "null" ]; then
                 local failed_count
                 local active_count
                 local success_count
@@ -854,7 +854,7 @@ monitor_multiple_prs() {
 
                     # Re-run failed checks for each PR that has failures
                     for pr_number in "${pr_numbers[@]}"; do
-                        if [ -n "${pr_checks[${pr_number}]}" ] && [ "${pr_checks[${pr_number}]}" != "null" ]; then
+                        if [ "${pr_checks[${pr_number}]:-null}" != "null" ]; then
                             local failed_count
                             local active_count
                             failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${pr_checks[${pr_number}]}")
@@ -866,7 +866,7 @@ monitor_multiple_prs() {
                                 # Display PR title (folded to 72 characters)
                                 fold -w 72 -s <<<"PR #${pr_number} - ${pr_titles[${pr_number}]}"
                                 # Display labels if any
-                                if [ -n "${pr_labels[${pr_number}]}" ]; then
+                                if [ -n "${pr_labels[${pr_number}]:-}" ]; then
                                     echo "Labels: ${pr_labels[${pr_number}]}"
                                 fi
                                 local pr_url
@@ -919,7 +919,7 @@ monitor_multiple_prs() {
                                                 echo "  Finding workflow run for: ${check_name}"
                                                 run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
 
-                                                if [ -n "${run_id}" ]; then
+                                                if [ -n "${run_id:-}" ]; then
                                                     echo "    Re-running workflow run ${run_id}..."
                                                     rerun_workflow_run "${repo}" "${run_id}" || true
                                                 else
@@ -944,7 +944,7 @@ monitor_multiple_prs() {
                                                 echo "  Finding workflow run for: ${check_name}"
                                                 run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
 
-                                                if [ -n "${run_id}" ]; then
+                                                if [ -n "${run_id:-}" ]; then
                                                     echo "    Re-running failed jobs in workflow run ${run_id}..."
                                                     rerun_failed_jobs "${repo}" "${run_id}" || true
                                                 else
@@ -1072,7 +1072,7 @@ while getopts "fw:s:r:c:W:m:vVh" opt; do
                 label:*)
                     RERUN_MODE="label"
                     LABEL_NAME="${OPTARG#label:}"
-                    if [[ -z "${LABEL_NAME}" ]]
+                    if [[ -z "${LABEL_NAME:-}" ]]
                     then
                         echo "Error: Label name must not be empty."
                         exit 1
@@ -1149,15 +1149,15 @@ if [ "${MULTI_PR_MODE}" = true ]; then
     # Call multi-PR monitoring function and exit
     monitor_multiple_prs "${MULTI_PR_REPO}" "${MULTI_PR_NUMBERS[@]}"
     exit 0
-elif [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
+elif [ -n "${CHECK_ID:-}" ] || [ -n "${WORKFLOW_ID:-}" ]; then
     # Direct re-run mode: only REPO is required
     REPO="${1:-}"
     PR_NUMBER=""
 
-    if [ -z "${REPO}" ]; then
+    if [ -z "${REPO:-}" ]; then
         # Try to get repo from git
         REPO=$(get_repo_from_git 2>/dev/null || echo "")
-        if [ -z "${REPO}" ]; then
+        if [ -z "${REPO:-}" ]; then
             echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
             exit 1
         fi
@@ -1165,10 +1165,10 @@ elif [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ]; then
 elif [ "${RERUN_MODE}" == "label" ]; then
     PR_NUMBER="${1}"
     REPO="${2:-}"
-    if [ -z "${REPO}" ]; then
+    if [ -z "${REPO:-}" ]; then
         # Try to get repo from git
         REPO=$(get_repo_from_git 2>/dev/null || echo "")
-        if [ -z "${REPO}" ]; then
+        if [ -z "${REPO:-}" ]; then
             echo "Error: REPO required for direct re-run. Specify as argument or run from git repository."
             exit 1
         fi
@@ -1178,7 +1178,7 @@ else
     PR_NUMBER="${1}"
     REPO="${2:-}"
 
-    if [ -z "${PR_NUMBER}" ]; then
+    if [ -z "${PR_NUMBER:-}" ]; then
         usage
     fi
 
@@ -1189,9 +1189,9 @@ else
     fi
 
     # If REPO is not provided, try to get it from the current git repository
-    if [ -z "${REPO}" ]; then
+    if [ -z "${REPO:-}" ]; then
         REPO=$(get_repo_from_git 2>/dev/null || echo "")
-        if [ -z "${REPO}" ]; then
+        if [ -z "${REPO:-}" ]; then
             echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
             exit 1
         fi
@@ -1206,7 +1206,7 @@ fi
 
 # Check if re-run operations are attempted with non-GitHub services
 if [ "${SERVICE}" != "github" ]; then
-    if [ -n "${CHECK_ID}" ] || [ -n "${WORKFLOW_ID}" ] || [ "${RERUN_MODE}" == "label" ]; then
+    if [ -n "${CHECK_ID:-}" ] || [ -n "${WORKFLOW_ID:-}" ] || [ "${RERUN_MODE}" == "label" ]; then
         echo "Error: Check re-run operations are only supported for GitHub service." >&2
         echo "Gitea/Forgejo services do not support automatic check re-runs via API." >&2
         exit 1
@@ -1220,7 +1220,7 @@ if [ "${SERVICE}" != "github" ]; then
 fi
 
 # Handle direct re-run mode
-if [ -n "${CHECK_ID}" ]; then
+if [ -n "${CHECK_ID:-}" ]; then
     echo "Re-running check run ${CHECK_ID} in ${REPO}..."
     if rerun_check "${REPO}" "${CHECK_ID}"; then
         echo "✅ Successfully requested re-run for check ${CHECK_ID}"
@@ -1229,7 +1229,7 @@ if [ -n "${CHECK_ID}" ]; then
         exit 1
     fi
     exit 0
-elif [ -n "${WORKFLOW_ID}" ]; then
+elif [ -n "${WORKFLOW_ID:-}" ]; then
     echo "Re-running workflow run ${WORKFLOW_ID} in ${REPO}..."
     if rerun_workflow_run "${REPO}" "${WORKFLOW_ID}"; then
         echo "✅ Successfully requested re-run for workflow ${WORKFLOW_ID}"
@@ -1251,14 +1251,14 @@ fi
 
 # Get the latest commit SHA for the PR
 PR_HEAD_SHA=$(get_pr_head_sha "${PR_NUMBER}" "${REPO}")
-if [ -z "${PR_HEAD_SHA}" ]; then
+if [ -z "${PR_HEAD_SHA:-}" ]; then
     echo "Error: Could not get HEAD SHA for PR #${PR_NUMBER}"
     exit 1
 fi
 
 # Get the PR title for notifications
 PR_TITLE=$(get_pr_title "${PR_NUMBER}" "${REPO}")
-if [ -z "${PR_TITLE}" ]; then
+if [ -z "${PR_TITLE:-}" ]; then
     PR_TITLE="PR #${PR_NUMBER}"
 fi
 
@@ -1301,13 +1301,13 @@ if [ "${FAILED_ONLY}" = true ]; then
     # Display PR title with eyes emoji
     echo "PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
     # Display labels if any
-    if [ -n "${PR_LABELS}" ]; then
+    if [ -n "${PR_LABELS:-}" ]; then
         echo "Labels: ${PR_LABELS}"
     fi
     PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
     echo "${PR_URL}"
     # Display last push timestamp
-    if [ -n "${PR_PUSH_TIMESTAMP}" ]; then
+    if [ -n "${PR_PUSH_TIMESTAMP:-}" ]; then
         echo "Last push: ${PR_PUSH_TIMESTAMP}"
     fi
     echo ""
@@ -1352,14 +1352,14 @@ while true; do
     fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
 
     # Display labels if any
-    if [ -n "${PR_LABELS}" ]; then
+    if [ -n "${PR_LABELS:-}" ]; then
         echo "Labels: ${PR_LABELS}"
     fi
     PR_URL=$(get_pr_url "${REPO}" "${PR_NUMBER}")
     echo "${PR_URL}"
 
     # Display last push timestamp
-    if [ -n "${PR_PUSH_TIMESTAMP}" ]; then
+    if [ -n "${PR_PUSH_TIMESTAMP:-}" ]; then
         echo "Last push: ${PR_PUSH_TIMESTAMP}"
     fi
     echo "=================================================="
