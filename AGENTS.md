@@ -31,4 +31,4 @@ Follow the restrictions on the file `.gitignore` and **never** commit any of thi
 - Each commit should represent a single, logical change
 - Use bullet points for multiple changes.
 - **ALWAYS** add a bullet list of the prompts used to generate the change being commited.
-- **NEVER** add promps like "commit changes" to the list of prompts.
+- **NEVER** add promps like "commit changes" to the list of prompts in the commit message.
