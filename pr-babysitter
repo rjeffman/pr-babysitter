@@ -703,7 +703,7 @@ render_checks() {
          elif .state == \"IN_PROGRESS\" then \"🔵\"
          elif .state == \"QUEUED\" then \"🧵\"
          elif .state == \"FAILURE\" then \"🚨\"
-         elif .state == \"CANCELED\" then \"✖️\"
+         elif .state == \"CANCELED\" then \"🚫\"
          else \"❓\" end) as \$emoji |
         \"\\(\$emoji) \\(.name)\" +
         (if .state == \"FAILURE\" or .state == \"IN_PROGRESS\" then \"\\n\\(.link)\" else \"\" end)"
@@ -749,7 +749,7 @@ render_pr_summary() {
          elif .state == \"IN_PROGRESS\" then \"🔵\"
          elif .state == \"QUEUED\" then \"🧵\"
          elif .state == \"FAILURE\" then \"🚨\"
-         elif .state == \"CANCELED\" then \"✖️\"
+         elif .state == \"CANCELED\" then \"🚫\"
          else \"❓\" end)" <<<"${checks_json}" | tr '\n' ' '
     echo ""
 }
