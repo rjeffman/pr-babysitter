@@ -363,8 +363,12 @@ get_pr_head_commit_timestamp() {
         gitlab|https://*gitlab*)
             iso_timestamp=$(gh_api_get "/projects/${project_id}/repository/commits/${sha}" | jq -r '.committed_date')
             ;;
-        *)
+        github)
             iso_timestamp=$(gh_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
+            ;;
+        *)
+            # Gitea/Forgejo uses updated_at field from status endpoint
+            iso_timestamp=$(gh_api_get "/repos/${repo}/commits?sha=${sha}&limit=1" | jq -r '.[].commit.committer.date')
             ;;
     esac
 
@@ -383,8 +387,8 @@ get_pr_comments() {
             # GitLab merge request notes/comments
             gh_api_get "/projects/${project_id}/merge_requests/${pr_number}/notes" 2>/dev/null || echo "[]"
             ;;
-        *)
-            # Fetch both issue comments and review comments
+        github)
+            # GitHub: Fetch both issue comments and review comments
             local issue_comments
             local review_comments
 
@@ -393,6 +397,10 @@ get_pr_comments() {
 
             # Combine both arrays into a single array
             jq -n --argjson ic "${issue_comments}" --argjson rc "${review_comments}" '$ic + $rc'
+            ;;
+        *)
+            # Gitea/Forgejo: Always return empty array
+            echo "[]"
             ;;
     esac
 }
