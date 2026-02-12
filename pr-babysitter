@@ -1094,7 +1094,7 @@ monitor_multiple_prs() {
         fi
 
         if [ "${has_restartable_failures}" = true ] && [ "${SERVICE}" = "github" ]; then
-            echo "Press 'R' to restart failed checks, or wait for auto-refresh..."
+            echo "Press 'R' to restart failed checks"
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
@@ -1240,12 +1240,68 @@ monitor_multiple_prs() {
             fi
         elif [ "${has_restartable_failures}" = true ]; then
             # Failures exist but service doesn't support re-runs
-            echo "Note: Check re-run functionality is only available for GitHub."
+            echo "Press 'D' to view detailed status"
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
-            # Wait before next check
-            sleep "${WAIT_TIME}"
+            # Wait for input with timeout
+            if read -t "${WAIT_TIME}" -n 1 -s -r key; then
+                if [[ "${key}" == "D" ]] || [[ "${key}" == "d" ]]; then
+                    # Clear screen before showing detailed status
+                    clear
+
+                    echo "=================================================="
+                    echo "Detailed Status"
+                    echo "=================================================="
+
+                    # Show detailed status for each PR/MR that has failures
+                    for pr_number in "${pr_numbers[@]}"; do
+                        if [ "${pr_checks[${pr_number}]:-null}" != "null" ]; then
+                            local failed_count
+                            local active_count
+                            failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${pr_checks[${pr_number}]}")
+                            active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${pr_checks[${pr_number}]}")
+
+                            if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
+                                echo ""
+                                echo "=================================================="
+                                # Display PR/MR title (folded to 72 characters)
+                                if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                                    fold -w 72 -s <<<"MR #${pr_number} - ${pr_titles[${pr_number}]}"
+                                else
+                                    fold -w 72 -s <<<"PR #${pr_number} - ${pr_titles[${pr_number}]}"
+                                fi
+                                # Display labels if any
+                                if [ -n "${pr_labels[${pr_number}]:-}" ]; then
+                                    echo "Labels: ${pr_labels[${pr_number}]}"
+                                fi
+                                local pr_url
+                                pr_url=$(get_pr_url "${repo}" "${pr_number}")
+                                echo "${pr_url}"
+                                echo "=================================================="
+                                echo ""
+
+                                # Display detailed check status
+                                render_checks <<<"${pr_checks[${pr_number}]}"
+
+                                echo ""
+                                echo "-----------------------------------"
+                            fi
+                        fi
+                    done
+
+                    echo ""
+                    echo "Press ENTER to return to monitoring..."
+                    read -r
+                    echo ""
+                    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                        echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                    else
+                        echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                    fi
+                    echo ""
+                fi
+            fi
         else
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
