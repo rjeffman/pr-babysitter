@@ -29,31 +29,35 @@ usage() {
     echo "       pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]"
     echo "       pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]"
     echo ""
-    echo "Monitor the status of checks for a GitHub PR, or directly re-run checks/workflows"
+    echo "Monitor the status of checks for a GitHub PR, or basic info for GitLab MRs"
     echo ""
     echo "Options:"
-    echo "  -f            Only show failed checks, do not monitor"
+    echo "  -f            Only show failed checks, do not monitor (GitHub only)"
     echo "  -w SECONDS    Wait time in seconds between checks (default: 300)"
     echo "  -s SERVICE    Remote service (default: github)"
     echo "                  github              - GitHub (github.com)"
+    echo "                  gitlab              - GitLab (gitlab.com)"
     echo "                  codeberg            - Codeberg (codeberg.org)"
     echo "                  https://HOST        - Custom service URL"
-    echo "  -r MODE       Re-run mode for failed checks:"
+    echo "  -r MODE       Re-run mode for failed checks (GitHub only):"
     echo "                  ask         - Prompt for re-run option (default)"
     echo "                  check       - Re-run individual check runs"
     echo "                  workflow    - Re-run entire workflow runs"
     echo "                  failed-jobs - Re-run only failed jobs in workflows"
     echo "                  label:NAME  - Add specified label NAME to the PR"
-    echo "  -c CHECK_ID   Directly re-run a specific check run by ID"
-    echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID"
-    echo "  -m REPO       Monitor multiple PRs for the specified repository"
+    echo "  -c CHECK_ID   Directly re-run a specific check run by ID (GitHub only)"
+    echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID (GitHub only)"
+    echo "  -m REPO       Monitor multiple PRs/MRs for the specified repository"
     echo "  -v            Enable verbose mode"
     echo "  -V            Show version and exit"
     echo "  -h            Show this help message"
     echo ""
     echo "Arguments:"
-    echo "  PR_NUMBER  The pull request number to monitor"
+    echo "  PR_NUMBER  The pull/merge request number to monitor"
     echo "  REPO       Optional repository in owner/repo format (defaults to current repo)"
+    echo "             Supports subgroups: owner/group/sub/repo (useful for GitLab)"
+    echo ""
+    echo "Note: Re-run functionality is only available for GitHub"
     exit 0
 }
 
@@ -66,6 +70,9 @@ get_hostname() {
             ;;
         codeberg)
             echo "codeberg.org"
+            ;;
+        gitlab)
+            echo "gitlab.com"
             ;;
         https://*)
             # Extract hostname from URL
@@ -91,14 +98,22 @@ get_api_url() {
         github)
             echo "https://api.github.com"
             ;;
+        gitlab)
+            # GitLab uses /api/v4
+            echo "https://${hostname}/api/v4"
+            ;;
         codeberg)
             # Codeberg uses Forgejo/Gitea API
             echo "https://${hostname}/api/v1"
             ;;
         https://*|http://*)
-            # Custom instance - try Gitea/Forgejo API first
-            # GitHub Enterprise would use /api/v3
-            echo "${service%/}/api/v1"
+            # Check if it's a GitLab instance (look for gitlab in URL)
+            if [[ "${service}" =~ gitlab ]]; then
+                echo "${service%/}/api/v4"
+            else
+                # Default to Gitea/Forgejo API
+                echo "${service%/}/api/v1"
+            fi
             ;;
         *)
             # Default to Gitea/Forgejo API for custom hostnames
@@ -114,10 +129,21 @@ get_pr_url() {
     local service="${SERVICE:-github}"
     hostname=$(get_hostname)
 
-    # GitHub uses /pull/ (singular), Gitea/Forgejo use /pulls/ (plural)
+    # GitHub uses /pull/ (singular), GitLab uses /-/merge_requests/, Gitea/Forgejo use /pulls/ (plural)
     case "${service}" in
         github)
             echo "https://${hostname}/${repo}/pull/${pr_number}"
+            ;;
+        gitlab)
+            echo "https://${hostname}/${repo}/-/merge_requests/${pr_number}"
+            ;;
+        https://*|http://*)
+            # Check if it's a GitLab instance
+            if [[ "${service}" =~ gitlab ]]; then
+                echo "https://${hostname}/${repo}/-/merge_requests/${pr_number}"
+            else
+                echo "https://${hostname}/${repo}/pulls/${pr_number}"
+            fi
             ;;
         *)
             echo "https://${hostname}/${repo}/pulls/${pr_number}"
@@ -129,6 +155,26 @@ get_api_token() {
     echo "${GITHUB_TOKEN:-${GH_TOKEN}}"
 }
 
+get_gitlab_token() {
+    echo "${GITLAB_TOKEN:-${GITLAB_ACCESS_TOKEN}}"
+}
+
+get_project_id() {
+    local repo="${1}"
+    local service="${SERVICE:-github}"
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            # GitLab requires URL-encoded project path (owner%2Frepo)
+            echo "${repo//\//%2F}"
+            ;;
+        *)
+            # Other services use repo directly
+            echo "${repo}"
+            ;;
+    esac
+}
+
 get_repo_from_git() {
     # Try to extract repository from git remote URL
     local remote_url
@@ -138,12 +184,13 @@ get_repo_from_git() {
         return 1
     fi
 
-    # Extract owner/repo from various URL formats:
+    # Extract owner/repo (with optional subgroups) from various URL formats:
     # - https://host.com/owner/repo.git
     # - git@host.com:owner/repo.git
     # - https://host.com/owner/repo
-    if [[ "${remote_url}" =~ [:/]([^/]+/[^/]+)(\.git)?$ ]]; then
-        local repo="${BASH_REMATCH[1]}"
+    # - https://host.com/owner/group/sub/repo.git (GitLab subgroups)
+    if [[ "${remote_url}" =~ (://[^/]+/|:)([^/]+(/[^/]+)+)(\.git)?$ ]]; then
+        local repo="${BASH_REMATCH[2]}"
         echo "${repo%.git}"
         return 0
     fi
@@ -158,7 +205,6 @@ gh_api_get() {
     local service="${SERVICE:-github}"
     api_url=$(get_api_url)
 
-    # Only GitHub requires authentication token
     case "${service}" in
         github)
             local token
@@ -172,6 +218,19 @@ gh_api_get() {
             curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
                 -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
                 -H "Authorization: Bearer ${token}" \
+                "${api_url}${endpoint}" \
+                "$@"
+            ;;
+        gitlab|https://*gitlab*)
+            local token
+            token=$(get_gitlab_token)
+
+            if [ -z "${token:-}" ]; then
+                echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
+                return 1
+            fi
+
+            curl -s -H "PRIVATE-TOKEN: ${token}" \
                 "${api_url}${endpoint}" \
                 "$@"
             ;;
@@ -189,7 +248,6 @@ gh_api_post() {
     local service="${SERVICE:-github}"
     api_url=$(get_api_url)
 
-    # Only GitHub requires authentication token
     case "${service}" in
         github)
             local token
@@ -207,6 +265,20 @@ gh_api_post() {
                 "${api_url}${endpoint}" \
                 "$@"
             ;;
+        gitlab|https://*gitlab*)
+            local token
+            token=$(get_gitlab_token)
+
+            if [ -z "${token:-}" ]; then
+                echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
+                return 1
+            fi
+
+            curl -s -X POST \
+                -H "PRIVATE-TOKEN: ${token}" \
+                "${api_url}${endpoint}" \
+                "$@"
+            ;;
         *)
             # Gitea/Forgejo - no authentication
             curl -s -X POST "${api_url}${endpoint}" "$@"
@@ -217,19 +289,52 @@ gh_api_post() {
 get_pr_head_sha() {
     local pr_number="${1}"
     local repo="${2}"
-    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.head.sha'
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.sha'
+            ;;
+        *)
+            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.head.sha'
+            ;;
+    esac
 }
 
 get_pr_title() {
     local pr_number="${1}"
     local repo="${2}"
-    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.title'
+            ;;
+        *)
+            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
+            ;;
+    esac
 }
 
 get_pr_author() {
     local pr_number="${1}"
     local repo="${2}"
-    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login'
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.author.username'
+            ;;
+        *)
+            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login'
+            ;;
+    esac
 }
 
 format_timestamp() {
@@ -248,9 +353,20 @@ get_pr_head_commit_timestamp() {
     local pr_number="${1}"
     local repo="${2}"
     local sha="${3}"
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
 
     local iso_timestamp
-    iso_timestamp=$(gh_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            iso_timestamp=$(gh_api_get "/projects/${project_id}/repository/commits/${sha}" | jq -r '.committed_date')
+            ;;
+        *)
+            iso_timestamp=$(gh_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
+            ;;
+    esac
 
     format_timestamp "${iso_timestamp}"
 }
@@ -258,22 +374,34 @@ get_pr_head_commit_timestamp() {
 get_pr_comments() {
     local pr_number="${1}"
     local repo="${2}"
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
 
-    # Fetch both issue comments and review comments
-    local issue_comments
-    local review_comments
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            # GitLab merge request notes/comments
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}/notes" 2>/dev/null || echo "[]"
+            ;;
+        *)
+            # Fetch both issue comments and review comments
+            local issue_comments
+            local review_comments
 
-    issue_comments=$(gh_api_get "/repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
-    review_comments=$(gh_api_get "/repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
+            issue_comments=$(gh_api_get "/repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
+            review_comments=$(gh_api_get "/repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
 
-    # Combine both arrays into a single array
-    jq -n --argjson ic "${issue_comments}" --argjson rc "${review_comments}" '$ic + $rc'
+            # Combine both arrays into a single array
+            jq -n --argjson ic "${issue_comments}" --argjson rc "${review_comments}" '$ic + $rc'
+            ;;
+    esac
 }
 
 get_latest_non_author_comment_timestamp() {
     local pr_number="${1}"
     local repo="${2}"
     local pr_author="${3}"
+    local service="${SERVICE:-github}"
 
     if [ -z "${pr_author:-}" ]; then
         echo ""
@@ -285,9 +413,20 @@ get_latest_non_author_comment_timestamp() {
 
     # Filter out author's comments and get the most recent updated_at timestamp
     local latest_timestamp
-    latest_timestamp=$(jq -r --arg author "${pr_author}" \
-        '[.[] | select(.user.login != $author) | .updated_at] | sort | reverse | .[0] // ""' \
-        <<<"${comments}")
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            # GitLab uses .author.username instead of .user.login
+            latest_timestamp=$(jq -r --arg author "${pr_author}" \
+                '[.[] | select(.author.username != $author) | .updated_at] | sort | reverse | .[0] // ""' \
+                <<<"${comments}")
+            ;;
+        *)
+            latest_timestamp=$(jq -r --arg author "${pr_author}" \
+                '[.[] | select(.user.login != $author) | .updated_at] | sort | reverse | .[0] // ""' \
+                <<<"${comments}")
+            ;;
+    esac
 
     format_timestamp "${latest_timestamp}"
 }
@@ -320,12 +459,24 @@ should_add_eyes_emoji() {
 get_pr_labels() {
     local pr_number="${1}"
     local repo="${2}"
-    gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '[.labels[].name] | join(", ")'
+    local service="${SERVICE:-github}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.labels | join(", ")'
+            ;;
+        *)
+            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '[.labels[].name] | join(", ")'
+            ;;
+    esac
 }
 
 get_check_runs() {
     local repo="${1}"
     local ref="${2}"
+    local pr_number="${3:-}"  # Optional third parameter for GitLab
     local service="${SERVICE:-github}"
 
     case "${service}" in
@@ -350,6 +501,65 @@ get_check_runs() {
                 appName: (.app.name // ""),
                 isGitHubActions: (.app.slug == "github-actions")
             }]'
+            ;;
+        gitlab|https://*gitlab*)
+            # GitLab pipeline status from MR data (both head_pipeline and pipeline)
+            local project_id
+            project_id=$(get_project_id "${repo}")
+
+            if [ -z "${pr_number:-}" ]; then
+                echo "[]"
+                return
+            fi
+
+            # Get MR data and extract both head_pipeline and pipeline
+            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | \
+            jq '[
+                (if .head_pipeline != null then
+                    {
+                        id: .head_pipeline.id,
+                        name: "Head Pipeline",
+                        state: (
+                            if .head_pipeline.status == "created" or .head_pipeline.status == "waiting_for_resource" or .head_pipeline.status == "preparing" or .head_pipeline.status == "pending" or .head_pipeline.status == "scheduled" or .head_pipeline.status == "manual" then "QUEUED"
+                            elif .head_pipeline.status == "running" then "IN_PROGRESS"
+                            elif .head_pipeline.status == "success" then "SUCCESS"
+                            elif .head_pipeline.status == "failed" then "FAILURE"
+                            elif .head_pipeline.status == "canceled" or .head_pipeline.status == "skipped" then "CANCELED"
+                            else "UNKNOWN"
+                            end
+                        ),
+                        link: .head_pipeline.web_url,
+                        completedAt: .head_pipeline.updated_at,
+                        checkSuiteId: .head_pipeline.id,
+                        appName: "GitLab CI",
+                        isGitHubActions: false
+                    }
+                else
+                    empty
+                end),
+                (if .pipeline != null then
+                    {
+                        id: .pipeline.id,
+                        name: "Pipeline",
+                        state: (
+                            if .pipeline.status == "created" or .pipeline.status == "waiting_for_resource" or .pipeline.status == "preparing" or .pipeline.status == "pending" or .pipeline.status == "scheduled" or .pipeline.status == "manual" then "QUEUED"
+                            elif .pipeline.status == "running" then "IN_PROGRESS"
+                            elif .pipeline.status == "success" then "SUCCESS"
+                            elif .pipeline.status == "failed" then "FAILURE"
+                            elif .pipeline.status == "canceled" or .pipeline.status == "skipped" then "CANCELED"
+                            else "UNKNOWN"
+                            end
+                        ),
+                        link: .pipeline.web_url,
+                        completedAt: .pipeline.updated_at,
+                        checkSuiteId: .pipeline.id,
+                        appName: "GitLab CI",
+                        isGitHubActions: false
+                    }
+                else
+                    empty
+                end)
+            ]'
             ;;
         *)
             # Gitea/Forgejo commit statuses API
@@ -691,8 +901,13 @@ monitor_multiple_prs() {
     local repo="${1}"
     shift
     local pr_numbers=("$@")
+    local service="${SERVICE:-github}"
 
-    echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+        echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+    else
+        echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+    fi
     echo ""
 
     # Declare associative arrays to store PR data
@@ -729,7 +944,7 @@ monitor_multiple_prs() {
             fi
 
             # Get check status
-            pr_checks["${pr_number}"]=$(get_check_runs "${repo}" "${pr_head_shas[${pr_number}]}" 2>/dev/null || echo "")
+            pr_checks["${pr_number}"]=$(get_check_runs "${repo}" "${pr_head_shas[${pr_number}]}" "${pr_number}" 2>/dev/null || echo "")
 
             # Get PR author
             pr_authors["${pr_number}"]=$(get_pr_author "${pr_number}" "${repo}" 2>/dev/null || echo "")
@@ -752,7 +967,11 @@ monitor_multiple_prs() {
         clear
 
         echo "=================================================="
-        echo "Multi-PR Monitor - ${repo}"
+        if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+            echo "Multi-MR Monitor - ${repo}"
+        else
+            echo "Multi-PR Monitor - ${repo}"
+        fi
         echo "=================================================="
         echo ""
 
@@ -760,7 +979,7 @@ monitor_multiple_prs() {
         for pr_number in "${pr_numbers[@]}"; do
             # Check if we have PR title
             if [ -z "${pr_titles[${pr_number}]:-}" ]; then
-                echo "#${pr_number} (Error: Could not retrieve PR)"
+                echo "#${pr_number} (Error: Could not retrieve MR/PR)"
                 echo ""
                 continue
             fi
@@ -771,7 +990,9 @@ monitor_multiple_prs() {
                 pr_url=$(get_pr_url "${repo}" "${pr_number}")
                 echo "#${pr_number} ${pr_titles[${pr_number}]}"
                 echo "${pr_url}"
-                echo "Checks: ❓ (Error: Could not retrieve checks)"
+                if [ "${service}" != "gitlab" ] && [[ ! "${service}" =~ gitlab ]]; then
+                    echo "Checks: ❓ (Error: Could not retrieve checks)"
+                fi
                 echo ""
                 continue
             fi
@@ -1103,9 +1324,9 @@ while getopts "fw:s:r:c:W:m:vVh" opt; do
         m)
             MULTI_PR_MODE=true
             MULTI_PR_REPO="${OPTARG}"
-            # Validate REPO format (owner/repo)
-            if ! [[ "${MULTI_PR_REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
-                echo "Error: REPO must be in owner/repo format"
+            # Validate REPO format (owner/repo or owner/group/sub/repo for subgroups)
+            if ! [[ "${MULTI_PR_REPO}" =~ ^[a-zA-Z0-9_.-]+(/[a-zA-Z0-9_.-]+)+$ ]]; then
+                echo "Error: REPO must be in owner/repo format (supports subgroups like owner/group/sub/repo)"
                 exit 1
             fi
             ;;
@@ -1198,9 +1419,9 @@ else
     fi
 fi
 
-# Validate REPO format (owner/repo)
-if ! [[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
-    echo "Error: REPO must be in owner/repo format"
+# Validate REPO format (owner/repo or owner/group/sub/repo for subgroups)
+if ! [[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+(/[a-zA-Z0-9_.-]+)+$ ]]; then
+    echo "Error: REPO must be in owner/repo format (supports subgroups like owner/group/sub/repo)"
     exit 1
 fi
 
@@ -1278,7 +1499,7 @@ RESET="\033[0m"
 
 # If failed-only mode, show failed checks and exit
 if [ "${FAILED_ONLY}" = true ]; then
-    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}")
+    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}" "${PR_NUMBER}")
     FAILED_CHECKS=$(jq '[.[] | select(.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED")] | length' <<<"${CHECKS_JSON}")
 
     if [ "${FAILED_CHECKS}" -eq 0 ]; then
@@ -1316,8 +1537,12 @@ if [ "${FAILED_ONLY}" = true ]; then
     exit 0
 fi
 
-# Monitor checks
-echo "Monitoring checks for PR #${PR_NUMBER}..."
+# Monitor MR/PR
+if [ "${SERVICE}" = "gitlab" ] || [[ "${SERVICE}" =~ gitlab ]]; then
+    echo "Monitoring merge request #${PR_NUMBER}..."
+else
+    echo "Monitoring checks for PR #${PR_NUMBER}..."
+fi
 echo ""
 
 # Common filters
@@ -1348,8 +1573,12 @@ while true; do
         EYES_EMOJI=" 👀"
     fi
 
-    # Display PR title with eyes emoji (folded to 72 characters)
-    fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+    # Display MR/PR title with eyes emoji (folded to 72 characters)
+    if [ "${SERVICE}" = "gitlab" ] || [[ "${SERVICE}" =~ gitlab ]]; then
+        fold -w 72 -s <<<"MR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+    else
+        fold -w 72 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+    fi
 
     # Display labels if any
     if [ -n "${PR_LABELS:-}" ]; then
@@ -1362,11 +1591,17 @@ while true; do
     if [ -n "${PR_PUSH_TIMESTAMP:-}" ]; then
         echo "Last push: ${PR_PUSH_TIMESTAMP}"
     fi
+
+    # Display author
+    if [ -n "${PR_AUTHOR:-}" ]; then
+        echo "Author: ${PR_AUTHOR}"
+    fi
+
     echo "=================================================="
     echo ""
 
     # Get check status
-    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}")
+    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}" "${PR_NUMBER}")
 
     # Format and display output
     render_checks <<<"${CHECKS_JSON}"
@@ -1398,7 +1633,7 @@ while true; do
             else
                 echo ""
                 echo "Note: Check re-run functionality is only available for GitHub."
-                echo "Gitea/Forgejo services do not support automatic check re-runs via API."
+                echo "GitLab/Gitea/Forgejo services do not support automatic check re-runs via API."
                 break
             fi
         else
