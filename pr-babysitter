@@ -517,12 +517,13 @@ get_check_runs() {
             mr_data=$(gh_api_get "/projects/${project_id}/merge_requests/${pr_number}")
 
             # Extract pipeline checks from MR data
+            # Prefer head_pipeline if available, otherwise use pipeline
             local pipeline_checks
             pipeline_checks=$(jq '[
-                (if .head_pipeline != null then
+                if .head_pipeline != null and .head_pipeline.status != null then
                     {
                         id: .head_pipeline.id,
-                        name: "Head Pipeline",
+                        name: "Pipeline",
                         state: (
                             if .head_pipeline.status == "created" or .head_pipeline.status == "waiting_for_resource" or .head_pipeline.status == "preparing" or .head_pipeline.status == "pending" or .head_pipeline.status == "scheduled" or .head_pipeline.status == "manual" then "QUEUED"
                             elif .head_pipeline.status == "running" then "IN_PROGRESS"
@@ -538,10 +539,7 @@ get_check_runs() {
                         appName: "GitLab CI",
                         isGitHubActions: false
                     }
-                else
-                    empty
-                end),
-                (if .pipeline != null then
+                elif .pipeline != null and .pipeline.status != null then
                     {
                         id: .pipeline.id,
                         name: "Pipeline",
@@ -562,7 +560,7 @@ get_check_runs() {
                     }
                 else
                     empty
-                end)
+                end
             ]' <<<"${mr_data}")
 
             # Get commit SHA from MR
