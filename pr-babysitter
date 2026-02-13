@@ -151,11 +151,11 @@ get_pr_url() {
     esac
 }
 
-get_api_token() {
+github_get_token() {
     echo "${GITHUB_TOKEN:-${GH_TOKEN}}"
 }
 
-get_gitlab_token() {
+gitlab_get_token() {
     echo "${GITLAB_TOKEN:-${GITLAB_ACCESS_TOKEN}}"
 }
 
@@ -198,7 +198,47 @@ get_repo_from_git() {
     return 1
 }
 
-gh_api_get() {
+github_api_get() {
+    local endpoint="${1}"
+    shift
+    local api_url
+    api_url=$(get_api_url)
+
+    local token
+    token=$(github_get_token)
+
+    if [ -z "${token:-}" ]; then
+        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        -H "Authorization: Bearer ${token}" \
+        "${api_url}${endpoint}" \
+        "$@"
+}
+
+gitlab_api_get() {
+    local endpoint="${1}"
+    shift
+    local api_url
+    api_url=$(get_api_url)
+
+    local token
+    token=$(gitlab_get_token)
+
+    if [ -z "${token:-}" ]; then
+        echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -H "PRIVATE-TOKEN: ${token}" \
+        "${api_url}${endpoint}" \
+        "$@"
+}
+
+service_api_get() {
     local endpoint="${1}"
     shift
     local api_url
@@ -207,32 +247,10 @@ gh_api_get() {
 
     case "${service}" in
         github)
-            local token
-            token=$(get_api_token)
-
-            if [ -z "${token:-}" ]; then
-                echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
-                return 1
-            fi
-
-            curl -s -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-                -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-                -H "Authorization: Bearer ${token}" \
-                "${api_url}${endpoint}" \
-                "$@"
+            github_api_get "${endpoint}" "$@"
             ;;
         gitlab|https://*gitlab*)
-            local token
-            token=$(get_gitlab_token)
-
-            if [ -z "${token:-}" ]; then
-                echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
-                return 1
-            fi
-
-            curl -s -H "PRIVATE-TOKEN: ${token}" \
-                "${api_url}${endpoint}" \
-                "$@"
+            gitlab_api_get "${endpoint}" "$@"
             ;;
         *)
             # Gitea/Forgejo - no authentication
@@ -251,7 +269,7 @@ gh_api_post() {
     case "${service}" in
         github)
             local token
-            token=$(get_api_token)
+            token=$(github_get_token)
 
             if [ -z "${token:-}" ]; then
                 echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
@@ -267,7 +285,7 @@ gh_api_post() {
             ;;
         gitlab|https://*gitlab*)
             local token
-            token=$(get_gitlab_token)
+            token=$(gitlab_get_token)
 
             if [ -z "${token:-}" ]; then
                 echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
@@ -295,10 +313,10 @@ get_pr_head_sha() {
 
     case "${service}" in
         gitlab|https://*gitlab*)
-            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.sha'
+            service_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.sha'
             ;;
         *)
-            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.head.sha'
+            service_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.head.sha'
             ;;
     esac
 }
@@ -312,10 +330,10 @@ get_pr_title() {
 
     case "${service}" in
         gitlab|https://*gitlab*)
-            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.title'
+            service_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.title'
             ;;
         *)
-            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
+            service_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.title'
             ;;
     esac
 }
@@ -329,10 +347,10 @@ get_pr_author() {
 
     case "${service}" in
         gitlab|https://*gitlab*)
-            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.author.username'
+            service_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.author.username'
             ;;
         *)
-            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login'
+            service_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login'
             ;;
     esac
 }
@@ -361,14 +379,14 @@ get_pr_head_commit_timestamp() {
 
     case "${service}" in
         gitlab|https://*gitlab*)
-            iso_timestamp=$(gh_api_get "/projects/${project_id}/repository/commits/${sha}" | jq -r '.committed_date')
+            iso_timestamp=$(service_api_get "/projects/${project_id}/repository/commits/${sha}" | jq -r '.committed_date')
             ;;
         github)
-            iso_timestamp=$(gh_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
+            iso_timestamp=$(service_api_get "/repos/${repo}/commits/${sha}" | jq -r '.commit.committer.date')
             ;;
         *)
             # Gitea/Forgejo uses updated_at field from status endpoint
-            iso_timestamp=$(gh_api_get "/repos/${repo}/commits?sha=${sha}&limit=1" | jq -r '.[].commit.committer.date')
+            iso_timestamp=$(service_api_get "/repos/${repo}/commits?sha=${sha}&limit=1" | jq -r '.[].commit.committer.date')
             ;;
     esac
 
@@ -385,15 +403,15 @@ get_pr_comments() {
     case "${service}" in
         gitlab|https://*gitlab*)
             # GitLab merge request notes/comments
-            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}/notes" 2>/dev/null || echo "[]"
+            service_api_get "/projects/${project_id}/merge_requests/${pr_number}/notes" 2>/dev/null || echo "[]"
             ;;
         github)
             # GitHub: Fetch both issue comments and review comments
             local issue_comments
             local review_comments
 
-            issue_comments=$(gh_api_get "/repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
-            review_comments=$(gh_api_get "/repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
+            issue_comments=$(service_api_get "/repos/${repo}/issues/${pr_number}/comments" 2>/dev/null || echo "[]")
+            review_comments=$(service_api_get "/repos/${repo}/pulls/${pr_number}/comments" 2>/dev/null || echo "[]")
 
             # Combine both arrays into a single array
             jq -n --argjson ic "${issue_comments}" --argjson rc "${review_comments}" '$ic + $rc'
@@ -473,12 +491,160 @@ get_pr_labels() {
 
     case "${service}" in
         gitlab|https://*gitlab*)
-            gh_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.labels | join(", ")'
+            service_api_get "/projects/${project_id}/merge_requests/${pr_number}" | jq -r '.labels | join(", ")'
             ;;
         *)
-            gh_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '[.labels[].name] | join(", ")'
+            service_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '[.labels[].name] | join(", ")'
             ;;
     esac
+}
+
+github_check_runs() {
+    local repo="${1}"
+    local ref="${2}"
+
+    # GitHub check-runs API
+    service_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
+    jq '[.check_runs[] | {
+        id: .id,
+        name: .name,
+        state: (
+            if .status == "queued" then "QUEUED"
+            elif .status == "in_progress" then "IN_PROGRESS"
+            elif .status == "completed" and .conclusion == "success" then "SUCCESS"
+            elif .status == "completed" and .conclusion == "failure" then "FAILURE"
+            elif .status == "completed" and .conclusion == "cancelled" then "CANCELED"
+            else "UNKNOWN"
+            end
+        ),
+        link: .html_url,
+        completedAt: .completed_at,
+        checkSuiteId: .check_suite.id,
+        appName: (.app.name // ""),
+        isGitHubActions: (.app.slug == "github-actions")
+    }]'
+}
+
+gitlab_check_runs() {
+    local repo="${1}"
+    local ref="${2}"
+    local pr_number="${3}"
+
+    # GitLab: pipeline status from MR data + commit statuses (external jobs)
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    if [ -z "${pr_number:-}" ]; then
+        echo "[]"
+        return
+    fi
+
+    # Get MR data
+    local mr_data
+    mr_data=$(service_api_get "/projects/${project_id}/merge_requests/${pr_number}")
+
+    # Extract pipeline checks from MR data
+    # Prefer head_pipeline if available, otherwise use pipeline
+    local pipeline_checks
+    pipeline_checks=$(jq '[
+        if .head_pipeline != null and .head_pipeline.status != null then
+            {
+                id: .head_pipeline.id,
+                name: "Pipeline",
+                state: (
+                    if .head_pipeline.status == "created" or .head_pipeline.status == "waiting_for_resource" or .head_pipeline.status == "preparing" or .head_pipeline.status == "pending" or .head_pipeline.status == "scheduled" or .head_pipeline.status == "manual" then "QUEUED"
+                    elif .head_pipeline.status == "running" then "IN_PROGRESS"
+                    elif .head_pipeline.status == "success" then "SUCCESS"
+                    elif .head_pipeline.status == "failed" then "FAILURE"
+                    elif .head_pipeline.status == "canceled" or .head_pipeline.status == "skipped" then "CANCELED"
+                    else "UNKNOWN"
+                    end
+                ),
+                link: .head_pipeline.web_url,
+                completedAt: .head_pipeline.updated_at,
+                checkSuiteId: .head_pipeline.id,
+                appName: "GitLab CI",
+                isGitHubActions: false
+            }
+        elif .pipeline != null and .pipeline.status != null then
+            {
+                id: .pipeline.id,
+                name: "Pipeline",
+                state: (
+                    if .pipeline.status == "created" or .pipeline.status == "waiting_for_resource" or .pipeline.status == "preparing" or .pipeline.status == "pending" or .pipeline.status == "scheduled" or .pipeline.status == "manual" then "QUEUED"
+                    elif .pipeline.status == "running" then "IN_PROGRESS"
+                    elif .pipeline.status == "success" then "SUCCESS"
+                    elif .pipeline.status == "failed" then "FAILURE"
+                    elif .pipeline.status == "canceled" or .pipeline.status == "skipped" then "CANCELED"
+                    else "UNKNOWN"
+                    end
+                ),
+                link: .pipeline.web_url,
+                completedAt: .pipeline.updated_at,
+                checkSuiteId: .pipeline.id,
+                appName: "GitLab CI",
+                isGitHubActions: false
+            }
+        else
+            empty
+        end
+    ]' <<<"${mr_data}")
+
+    # Get commit SHA from MR
+    local commit_sha
+    commit_sha=$(jq -r '.sha' <<<"${mr_data}")
+
+    # Get commit statuses (external jobs)
+    local commit_statuses
+    commit_statuses=$(service_api_get "/projects/${project_id}/repository/commits/${commit_sha}/statuses" 2>/dev/null || echo "[]")
+
+    # Transform commit statuses to normalized format
+    local external_checks
+    external_checks=$(jq '[.[] | {
+        id: .id,
+        name: .name,
+        state: (
+            if .status == "pending" then "IN_PROGRESS"
+            elif .status == "running" then "IN_PROGRESS"
+            elif .status == "success" then "SUCCESS"
+            elif .status == "failed" then "FAILURE"
+            elif .status == "canceled" then "CANCELED"
+            else "UNKNOWN"
+            end
+        ),
+        link: .target_url,
+        completedAt: .finished_at,
+        checkSuiteId: .id,
+        appName: (.author.username // "External"),
+        isGitHubActions: false
+    }]' <<<"${commit_statuses}")
+
+    # Combine pipeline checks and external checks
+    jq -n --argjson pipelines "${pipeline_checks}" --argjson external "${external_checks}" \
+        '$pipelines + $external'
+}
+
+forgejo_check_runs() {
+    local repo="${1}"
+    local ref="${2}"
+
+    # Gitea/Forgejo commit statuses API
+    service_api_get "/repos/${repo}/commits/${ref}/status" | \
+    jq '[.statuses[]? | {
+        name: .context,
+        state: (
+            if .status == "pending" then "IN_PROGRESS"
+            elif .status == "success" then "SUCCESS"
+            elif .status == "failure" or .state == "error" then "FAILURE"
+            else "UNKNOWN"
+            end
+        ),
+        link: .target_url,
+        completedAt: .updated_at,
+        checkSuiteId: .id,
+        appName: (.creator.login // "Forgejo"),
+        isGitHubActions: false
+    }]'
 }
 
 get_check_runs() {
@@ -489,140 +655,13 @@ get_check_runs() {
 
     case "${service}" in
         github)
-            # GitHub check-runs API
-            gh_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
-            jq '[.check_runs[] | {
-                id: .id,
-                name: .name,
-                state: (
-                    if .status == "queued" then "QUEUED"
-                    elif .status == "in_progress" then "IN_PROGRESS"
-                    elif .status == "completed" and .conclusion == "success" then "SUCCESS"
-                    elif .status == "completed" and .conclusion == "failure" then "FAILURE"
-                    elif .status == "completed" and .conclusion == "cancelled" then "CANCELED"
-                    else "UNKNOWN"
-                    end
-                ),
-                link: .html_url,
-                completedAt: .completed_at,
-                checkSuiteId: .check_suite.id,
-                appName: (.app.name // ""),
-                isGitHubActions: (.app.slug == "github-actions")
-            }]'
+            github_check_runs "${repo}" "${ref}"
             ;;
         gitlab|https://*gitlab*)
-            # GitLab: pipeline status from MR data + commit statuses (external jobs)
-            local project_id
-            project_id=$(get_project_id "${repo}")
-
-            if [ -z "${pr_number:-}" ]; then
-                echo "[]"
-                return
-            fi
-
-            # Get MR data
-            local mr_data
-            mr_data=$(gh_api_get "/projects/${project_id}/merge_requests/${pr_number}")
-
-            # Extract pipeline checks from MR data
-            # Prefer head_pipeline if available, otherwise use pipeline
-            local pipeline_checks
-            pipeline_checks=$(jq '[
-                if .head_pipeline != null and .head_pipeline.status != null then
-                    {
-                        id: .head_pipeline.id,
-                        name: "Pipeline",
-                        state: (
-                            if .head_pipeline.status == "created" or .head_pipeline.status == "waiting_for_resource" or .head_pipeline.status == "preparing" or .head_pipeline.status == "pending" or .head_pipeline.status == "scheduled" or .head_pipeline.status == "manual" then "QUEUED"
-                            elif .head_pipeline.status == "running" then "IN_PROGRESS"
-                            elif .head_pipeline.status == "success" then "SUCCESS"
-                            elif .head_pipeline.status == "failed" then "FAILURE"
-                            elif .head_pipeline.status == "canceled" or .head_pipeline.status == "skipped" then "CANCELED"
-                            else "UNKNOWN"
-                            end
-                        ),
-                        link: .head_pipeline.web_url,
-                        completedAt: .head_pipeline.updated_at,
-                        checkSuiteId: .head_pipeline.id,
-                        appName: "GitLab CI",
-                        isGitHubActions: false
-                    }
-                elif .pipeline != null and .pipeline.status != null then
-                    {
-                        id: .pipeline.id,
-                        name: "Pipeline",
-                        state: (
-                            if .pipeline.status == "created" or .pipeline.status == "waiting_for_resource" or .pipeline.status == "preparing" or .pipeline.status == "pending" or .pipeline.status == "scheduled" or .pipeline.status == "manual" then "QUEUED"
-                            elif .pipeline.status == "running" then "IN_PROGRESS"
-                            elif .pipeline.status == "success" then "SUCCESS"
-                            elif .pipeline.status == "failed" then "FAILURE"
-                            elif .pipeline.status == "canceled" or .pipeline.status == "skipped" then "CANCELED"
-                            else "UNKNOWN"
-                            end
-                        ),
-                        link: .pipeline.web_url,
-                        completedAt: .pipeline.updated_at,
-                        checkSuiteId: .pipeline.id,
-                        appName: "GitLab CI",
-                        isGitHubActions: false
-                    }
-                else
-                    empty
-                end
-            ]' <<<"${mr_data}")
-
-            # Get commit SHA from MR
-            local commit_sha
-            commit_sha=$(jq -r '.sha' <<<"${mr_data}")
-
-            # Get commit statuses (external jobs)
-            local commit_statuses
-            commit_statuses=$(gh_api_get "/projects/${project_id}/repository/commits/${commit_sha}/statuses" 2>/dev/null || echo "[]")
-
-            # Transform commit statuses to normalized format
-            local external_checks
-            external_checks=$(jq '[.[] | {
-                id: .id,
-                name: .name,
-                state: (
-                    if .status == "pending" then "IN_PROGRESS"
-                    elif .status == "running" then "IN_PROGRESS"
-                    elif .status == "success" then "SUCCESS"
-                    elif .status == "failed" then "FAILURE"
-                    elif .status == "canceled" then "CANCELED"
-                    else "UNKNOWN"
-                    end
-                ),
-                link: .target_url,
-                completedAt: .finished_at,
-                checkSuiteId: .id,
-                appName: (.author.username // "External"),
-                isGitHubActions: false
-            }]' <<<"${commit_statuses}")
-
-            # Combine pipeline checks and external checks
-            jq -n --argjson pipelines "${pipeline_checks}" --argjson external "${external_checks}" \
-                '$pipelines + $external'
+            gitlab_check_runs "${repo}" "${ref}" "${pr_number}"
             ;;
         *)
-            # Gitea/Forgejo commit statuses API
-            #
-            gh_api_get "/repos/${repo}/commits/${ref}/status" | \
-            jq '[.statuses[]? | {
-                name: .context,
-                state: (
-                    if .status == "pending" then "IN_PROGRESS"
-                    elif .status == "success" then "SUCCESS"
-                    elif .status == "failure" or .state == "error" then "FAILURE"
-                    else "UNKNOWN"
-                    end
-                ),
-                link: .target_url,
-                completedAt: .updated_at,
-                checkSuiteId: .id,
-                appName: (.creator.login // "Forgejo"),
-                isGitHubActions: false
-            }]'
+            forgejo_check_runs "${repo}" "${ref}"
             ;;
     esac
 }
@@ -652,7 +691,7 @@ get_check_run_details() {
     local repo="${1}"
     local check_run_id="${2}"
 
-    gh_api_get "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
+    service_api_get "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
 }
 
 get_workflow_run_id_from_check() {
@@ -807,7 +846,142 @@ send_success_notification() {
         "All checks passed successfully for:\n${pr_title}"
 }
 
-rerun_github_action() {
+github_rerun_check() {
+    local repo="${1}"
+    local checks_json="${2}"
+    local failed_check_filter="${3}"
+
+    echo ""
+    echo "Re-running individual check runs..."
+    # Get all failed checks with their IDs and names
+    jq -r "[.[] | select(${failed_check_filter})] | .[] | \"\(.id)|\(.name)\"" <<<"${checks_json}" | \
+    while IFS='|' read -r check_id check_name; do
+        echo "  Requesting re-run for: ${check_name}"
+        rerun_check "${repo}" "${check_id}" || true
+    done
+}
+
+github_rerun_workflow() {
+    local repo="${1}"
+    local checks_json="${2}"
+    local failed_check_filter="${3}"
+
+    echo ""
+    echo "Re-running entire workflow runs..."
+    # Get unique workflow run IDs from failed GitHub Actions checks
+    local failed_ga_checks
+    failed_ga_checks=$(jq -r "[.[] | select(${failed_check_filter}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${checks_json}")
+
+    # shellcheck disable=SC2312
+    if [ "$(jq 'length' <<<"${failed_ga_checks}")" -eq 0 ]; then
+        echo "  No GitHub Actions workflows to re-run"
+    else
+        # shellcheck disable=SC2034
+        jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${failed_ga_checks}" | \
+        while IFS='|' read -r check_id check_name app_name; do
+            echo "  Finding workflow run for: ${check_name}"
+            run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
+
+            if [ -n "${run_id:-}" ]; then
+                echo "    Re-running workflow run ${run_id}..."
+                rerun_workflow_run "${repo}" "${run_id}" || true
+            else
+                echo "    Warning: Could not find workflow run ID"
+            fi
+        done
+    fi
+}
+
+github_rerun_failed_jobs() {
+    local repo="${1}"
+    local checks_json="${2}"
+    local failed_check_filter="${3}"
+
+    echo ""
+    echo "Re-running only failed jobs in workflows..."
+    # Get unique workflow run IDs from failed GitHub Actions checks
+    local failed_ga_checks
+    failed_ga_checks=$(jq -r "[.[] | select(${failed_check_filter}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${checks_json}")
+
+    # shellcheck disable=SC2312
+    if [ "$(jq 'length' <<<"${failed_ga_checks}")" -eq 0 ]; then
+        echo "  No GitHub Actions workflows to re-run"
+    else
+        # shellcheck disable=SC2034
+        jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${failed_ga_checks}" | \
+        while IFS='|' read -r check_id check_name app_name; do
+            echo "  Finding workflow run for: ${check_name}"
+            run_id=$(get_workflow_run_id_from_check "${repo}" "${check_id}")
+
+            if [ -n "${run_id:-}" ]; then
+                echo "    Re-running failed jobs in workflow run ${run_id}..."
+                rerun_failed_jobs "${repo}" "${run_id}" || true
+            else
+                echo "    Warning: Could not find workflow run ID"
+            fi
+        done
+    fi
+}
+
+github_rerun_label() {
+    local repo="${1}"
+    local pr_number="${2}"
+
+    echo ""
+    IFS= read -p "Label name: " -r LABEL_NAME
+    echo "Adding label '${LABEL_NAME}' to PR #${pr_number}..."
+    if add_pr_label "${repo}" "${pr_number}" "${LABEL_NAME}"; then
+        echo "  Successfully added label '${LABEL_NAME}'"
+    else
+        echo "  Failed to add label"
+    fi
+}
+
+ask_rerun_option() {
+    local rerun_mode="${1}"
+
+    # If mode is already set, return it
+    if [ "${rerun_mode}" != "ask" ]; then
+        echo "${rerun_mode}"
+        return 0
+    fi
+
+    # Ask user for re-run option
+    echo ""
+    echo "Re-run options:"
+    echo "  1) Re-run individual check runs (default)"
+    echo "  2) Re-run entire workflow runs (all jobs)"
+    echo "  3) Re-run only failed jobs in workflows"
+    echo "  4) Add a label to re-run checks"
+    echo "  n) Skip re-run"
+    echo ""
+    read -p "Select option (1-3, n): " -n 1 -r
+    echo ""
+
+    case ${REPLY} in
+        1|"")
+            echo "check"
+            ;;
+        2)
+            echo "workflow"
+            ;;
+        3)
+            echo "failed-jobs"
+            ;;
+        4)
+            echo "label"
+            ;;
+        [Nn])
+            echo "skip"
+            ;;
+        *)
+            echo "Invalid option. Skipping re-run." >&2
+            echo "skip"
+            ;;
+    esac
+}
+
+github_rerun_action() {
     local service="${SERVICE:-github}"
 
     # Only allow re-runs for GitHub
@@ -819,113 +993,22 @@ rerun_github_action() {
     fi
 
     # Determine re-run mode
-    rerun_action="${RERUN_MODE}"
-    if [ "${RERUN_MODE}" = "ask" ]; then
-        echo ""
-        echo "Re-run options:"
-        echo "  1) Re-run individual check runs (default)"
-        echo "  2) Re-run entire workflow runs (all jobs)"
-        echo "  3) Re-run only failed jobs in workflows"
-        echo "  4) Add a label to re-run checks"
-        echo "  n) Skip re-run"
-        echo ""
-        read -p "Select option (1-3, n): " -n 1 -r
-        echo ""
-
-        case ${REPLY} in
-            1|"")
-                rerun_action="check"
-                ;;
-            2)
-                rerun_action="workflow"
-                ;;
-            3)
-                rerun_action="failed-jobs"
-                ;;
-            4)
-                rerun_action="label"
-                ;;
-            [Nn])
-                rerun_action="skip"
-                ;;
-            *)
-                echo "Invalid option. Skipping re-run."
-                rerun_action="skip"
-                ;;
-        esac
-    fi
+    local rerun_action
+    rerun_action=$(ask_rerun_option "${RERUN_MODE}")
 
     # Execute the selected re-run action
     case ${rerun_action} in
         check)
-            echo ""
-            echo "Re-running individual check runs..."
-            # Get all failed checks with their IDs and names
-            jq -r "[.[] | select(${FAILED_CHECK_FILTER})] | .[] | \"\(.id)|\(.name)\"" <<<"${CHECKS_JSON}" | \
-            while IFS='|' read -r check_id check_name; do
-                echo "  Requesting re-run for: ${check_name}"
-                rerun_check "${REPO}" "${check_id}" || true
-            done
+            github_rerun_check "${REPO}" "${CHECKS_JSON}" "${FAILED_CHECK_FILTER}"
             ;;
         workflow)
-            echo ""
-            echo "Re-running entire workflow runs..."
-            # Get unique workflow run IDs from failed GitHub Actions checks
-            FAILED_GA_CHECKS=$(jq -r "[.[] | select(${FAILED_CHECK_FILTER}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${CHECKS_JSON}")
-
-            # shellcheck disable=SC2312
-            if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
-                echo "  No GitHub Actions workflows to re-run"
-            else
-                # shellcheck disable=SC2034
-                jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
-                while IFS='|' read -r check_id check_name app_name; do
-                    echo "  Finding workflow run for: ${check_name}"
-                    run_id=$(get_workflow_run_id_from_check "${REPO}" "${check_id}")
-
-                    if [ -n "${run_id:-}" ]; then
-                        echo "    Re-running workflow run ${run_id}..."
-                        rerun_workflow_run "${REPO}" "${run_id}" || true
-                    else
-                        echo "    Warning: Could not find workflow run ID"
-                    fi
-                done
-            fi
+            github_rerun_workflow "${REPO}" "${CHECKS_JSON}" "${FAILED_CHECK_FILTER}"
             ;;
         failed-jobs)
-            echo ""
-            echo "Re-running only failed jobs in workflows..."
-            # Get unique workflow run IDs from failed GitHub Actions checks
-            FAILED_GA_CHECKS=$(jq -r "[.[] | select(${FAILED_CHECK_FILTER}) | select(.isGitHubActions == true)] | unique_by(.checkSuiteId)" <<<"${CHECKS_JSON}")
-
-            # shellcheck disable=SC2312
-            if [ "$(jq 'length' <<<"${FAILED_GA_CHECKS}")" -eq 0 ]; then
-                echo "  No GitHub Actions workflows to re-run"
-            else
-                # shellcheck disable=SC2034
-                jq -r '.[] | "\(.id)|\(.name)|\(.appName)"' <<<"${FAILED_GA_CHECKS}" | \
-                while IFS='|' read -r check_id check_name app_name; do
-                    echo "  Finding workflow run for: ${check_name}"
-                    run_id=$(get_workflow_run_id_from_check "${REPO}" "${check_id}")
-
-                    if [ -n "${run_id:-}" ]; then
-                        echo "    Re-running failed jobs in workflow run ${run_id}..."
-                        rerun_failed_jobs "${REPO}" "${run_id}" || true
-                    else
-                        echo "    Warning: Could not find workflow run ID"
-                    fi
-                done
-            fi
+            github_rerun_failed_jobs "${REPO}" "${CHECKS_JSON}" "${FAILED_CHECK_FILTER}"
             ;;
         label)
-            echo ""
-            IFS= read -p "Label name: " -r LABEL_NAME
-            echo "Adding label '${LABEL_NAME}' to PR #${PR_NUMBER}..."
-            if add_pr_label "${REPO}" "${PR_NUMBER}" "${LABEL_NAME}"; then
-                echo "  Successfully added label '${LABEL_NAME}'"
-            else
-                echo "  Failed to add label"
-            fi
+            github_rerun_label "${REPO}" "${PR_NUMBER}"
             ;;
         skip)
             echo "Skipping re-run."
@@ -1728,7 +1811,7 @@ while true; do
             echo ""
             echo "There are ${FAILED_CHECKS} failed check(s)."
             if [ "${SERVICE}" = "github" ]; then
-                rerun_github_action
+                github_rerun_action
             else
                 echo ""
                 echo "Note: Check re-run functionality is only available for GitHub."
