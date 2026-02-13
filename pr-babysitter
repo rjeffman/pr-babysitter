@@ -544,8 +544,9 @@ github_check_runs() {
     local repo="${1}"
     local ref="${2}"
 
-    # GitHub check-runs API
-    service_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
+    # Fetch check runs from check-runs API
+    local check_runs
+    check_runs=$(service_api_get "/repos/${repo}/commits/${ref}/check-runs" | \
     jq '[.check_runs[] | {
         id: .id,
         name: .name,
@@ -563,7 +564,31 @@ github_check_runs() {
         checkSuiteId: .check_suite.id,
         appName: (.app.name // ""),
         isGitHubActions: (.app.slug == "github-actions")
-    }]'
+    }]')
+
+    # Fetch commit statuses from statuses API
+    local statuses
+    statuses=$(service_api_get "/repos/${repo}/statuses/${ref}" | \
+    jq '[.[] | {
+        id: .id,
+        name: .context,
+        state: (
+            if .state == "pending" then "IN_PROGRESS"
+            elif .state == "success" then "SUCCESS"
+            elif .state == "failure" or .state == "error" then "FAILURE"
+            else "UNKNOWN"
+            end
+        ),
+        link: .target_url,
+        completedAt: .updated_at,
+        checkSuiteId: .id,
+        appName: (.creator.login // "GitHub"),
+        isGitHubActions: false
+    }]')
+
+    # Combine both check runs and statuses, deduplicate by name
+    jq -n --argjson checks "${check_runs}" --argjson statuses "${statuses}" \
+        '($checks + $statuses) | unique_by(.name)'
 }
 
 # Fetch and normalize GitLab pipeline jobs and commit statuses to standard format
@@ -831,9 +856,13 @@ render_pr_summary() {
         echo "Last push: ${push_timestamp}"
     fi
 
-    # Print "Checks:" followed by emoji statuses (next line)
-    echo -n "Checks: "
-    jq -r \
+    # Print "Checks:" on its own line
+    echo "Checks:"
+
+    # Get emojis as array (max 50 chars per line)
+    local -a emojis
+    # shellcheck disable=SC2312
+    mapfile -t emojis < <(jq -r \
     "sort_by(
         if .state == \"FAILURE\" then 1
         elif .state == \"CANCELED\" then 2
@@ -847,8 +876,28 @@ render_pr_summary() {
          elif .state == \"QUEUED\" then \"🧵\"
          elif .state == \"FAILURE\" then \"🚨\"
          elif .state == \"CANCELED\" then \"🚫\"
-         else \"❓\" end)" <<<"${checks_json}" | tr '\n' ' '
-    echo ""
+         else \"❓\" end)" <<<"${checks_json}")
+
+    # Print emojis with max 50 chars per line
+    local current_line=""
+    local max_length=50
+
+    for i in "${!emojis[@]}"; do
+        local emoji_with_space=" ${emojis[${i}]}"
+        local new_length=$((${#current_line} + ${#emoji_with_space}))
+
+        if [ "${new_length}" -gt "${max_length}" ] && [ -n "${current_line}" ]; then
+            echo "${current_line}"
+            current_line="${emoji_with_space}"
+        else
+            current_line="${current_line}${emoji_with_space}"
+        fi
+    done
+
+    # Print final line if not empty
+    if [ -n "${current_line}" ]; then
+        echo "${current_line}"
+    fi
 }
 
 # Add a label to a GitHub PR
