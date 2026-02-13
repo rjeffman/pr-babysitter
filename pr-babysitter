@@ -25,9 +25,9 @@ fi
 # Display usage information and command-line options
 usage() {
     echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
+    echo "       pr-babysitter [OPTIONS] <REPO> <PR_NUMBER> [PR_NUMBER...]"
     echo "       pr-babysitter [OPTIONS] -c CHECK_ID [REPO]"
     echo "       pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]"
-    echo "       pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]"
     echo ""
     echo "Monitor the status of checks for a GitHub PR, or basic info for GitLab MRs"
     echo ""
@@ -47,15 +47,20 @@ usage() {
     echo "                  label:NAME  - Add specified label NAME to the PR"
     echo "  -c CHECK_ID   Directly re-run a specific check run by ID (GitHub only)"
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID (GitHub only)"
-    echo "  -m REPO       Monitor multiple PRs/MRs for the specified repository"
     echo "  -v            Enable verbose mode"
     echo "  -V            Show version and exit"
     echo "  -h            Show this help message"
     echo ""
     echo "Arguments:"
     echo "  PR_NUMBER  The pull/merge request number to monitor"
-    echo "  REPO       Optional repository in owner/repo format (defaults to current repo)"
+    echo "  REPO       Repository in owner/repo format (defaults to current repo)"
     echo "             Supports subgroups: owner/group/sub/repo (useful for GitLab)"
+    echo ""
+    echo "Examples:"
+    echo "  pr-babysitter 123                    # Monitor PR #123 in current repo"
+    echo "  pr-babysitter 123 owner/repo         # Monitor PR #123 in owner/repo"
+    echo "  pr-babysitter owner/repo 123         # Same as above"
+    echo "  pr-babysitter owner/repo 123 456     # Monitor PRs #123 and #456 (multi-mode)"
     echo ""
     echo "Note: Re-run functionality is only available for GitHub"
     exit 0
@@ -1696,13 +1701,11 @@ RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
 LABEL_NAME=""     # Label name to add to PR when using label mode
 CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
-MULTI_PR_MODE=false  # Multi-PR monitoring mode
-MULTI_PR_REPO=""     # Repository for multi-PR mode
 
 NOTIFY="${NOTIFY:-":"}"
 
 # Parse options
-while getopts "fw:s:r:c:W:m:vVh" opt; do
+while getopts "fw:s:r:c:W:vVh" opt; do
     case ${opt} in
         f)
             FAILED_ONLY=true
@@ -1750,15 +1753,6 @@ while getopts "fw:s:r:c:W:m:vVh" opt; do
             fi
             WORKFLOW_ID="${OPTARG}"
             ;;
-        m)
-            MULTI_PR_MODE=true
-            MULTI_PR_REPO="${OPTARG}"
-            # Validate REPO format (owner/repo or owner/group/sub/repo for subgroups)
-            if ! [[ "${MULTI_PR_REPO}" =~ ^[a-zA-Z0-9_.-]+(/[a-zA-Z0-9_.-]+)+$ ]]; then
-                echo "Error: REPO must be in owner/repo format (supports subgroups like owner/group/sub/repo)"
-                exit 1
-            fi
-            ;;
         v)
             VERBOSE="YES"
             ;;
@@ -1778,28 +1772,7 @@ done
 shift $((OPTIND - 1))
 
 # Parse arguments based on mode
-if [ "${MULTI_PR_MODE}" = true ]; then
-    # Multi-PR monitoring mode: PR numbers are positional arguments
-    if [ $# -lt 1 ]; then
-        echo "Error: At least one PR_NUMBER required for multi-PR mode"
-        usage
-    fi
-
-    # Collect all PR numbers from positional arguments
-    MULTI_PR_NUMBERS=()
-    for arg in "$@"; do
-        # Validate each PR_NUMBER is numeric
-        if ! [[ "${arg}" =~ ^[0-9]+$ ]]; then
-            echo "Error: PR_NUMBER must be a positive integer: ${arg}"
-            exit 1
-        fi
-        MULTI_PR_NUMBERS+=("${arg}")
-    done
-
-    # Call multi-PR monitoring function and exit
-    monitor_multiple_prs "${MULTI_PR_REPO}" "${MULTI_PR_NUMBERS[@]}"
-    exit 0
-elif [ -n "${CHECK_ID:-}" ] || [ -n "${WORKFLOW_ID:-}" ]; then
+if [ -n "${CHECK_ID:-}" ] || [ -n "${WORKFLOW_ID:-}" ]; then
     # Direct re-run mode: only REPO is required
     REPO="${1:-}"
     PR_NUMBER=""
@@ -1824,26 +1797,60 @@ elif [ "${RERUN_MODE}" == "label" ]; then
         fi
     fi
 else
-    # Normal PR monitoring mode
-    PR_NUMBER="${1}"
-    REPO="${2:-}"
-
-    if [ -z "${PR_NUMBER:-}" ]; then
+    # Automatic mode detection based on first positional argument
+    if [ $# -eq 0 ]; then
         usage
     fi
 
-    # Validate PR_NUMBER is numeric
-    if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-        echo "Error: PR_NUMBER must be a positive integer"
-        exit 1
-    fi
+    # Check if first argument is a number or repo
+    if [[ "${1}" =~ ^[0-9]+$ ]]; then
+        # First argument is a number - traditional mode
+        PR_NUMBER="${1}"
+        REPO="${2:-}"
 
-    # If REPO is not provided, try to get it from the current git repository
-    if [ -z "${REPO:-}" ]; then
-        REPO=$(get_repo_from_git 2>/dev/null || echo "")
+        # If REPO is not provided, try to get it from the current git repository
         if [ -z "${REPO:-}" ]; then
-            echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
+            REPO=$(get_repo_from_git 2>/dev/null || echo "")
+            if [ -z "${REPO:-}" ]; then
+                echo "Error: Could not determine repository. Please specify REPO argument or run from within a git repository."
+                exit 1
+            fi
+        fi
+    else
+        # First argument is not a number - assume it's REPO
+        REPO="${1}"
+        shift
+
+        # Validate REPO format
+        if ! [[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+(/[a-zA-Z0-9_.-]+)+$ ]]; then
+            echo "Error: REPO must be in owner/repo format (supports subgroups like owner/group/sub/repo)"
             exit 1
+        fi
+
+        # Remaining arguments must be PR numbers
+        if [ $# -eq 0 ]; then
+            echo "Error: At least one PR_NUMBER required"
+            usage
+        fi
+
+        # Collect all PR numbers from remaining arguments
+        MULTI_PR_NUMBERS=()
+        for arg in "$@"; do
+            # Validate each PR_NUMBER is numeric
+            if ! [[ "${arg}" =~ ^[0-9]+$ ]]; then
+                echo "Error: PR_NUMBER must be a positive integer: ${arg}"
+                exit 1
+            fi
+            MULTI_PR_NUMBERS+=("${arg}")
+        done
+
+        # If multiple PR numbers, enter multi-PR mode
+        if [ "${#MULTI_PR_NUMBERS[@]}" -gt 1 ]; then
+            monitor_multiple_prs "${REPO}" "${MULTI_PR_NUMBERS[@]}"
+            exit 0
+        else
+            # Single PR number
+            PR_NUMBER="${MULTI_PR_NUMBERS[0]}"
         fi
     fi
 fi

@@ -9,15 +9,15 @@ You can install `pr-babysitter` by downloading the script using `curl` and placi
 
 ### From a release tag
 
-To install a specific version from a release tag (e.g., `v1.0.0`), use the following command:
+To install a specific version from a release tag (e.g., `v1.1.0`), use the following command:
 
 ```bash
 mkdir -p "$HOME/bin"
-curl -sL "https://github.com/rjeffman/pr-babysitter/releases/download/v1.0.0/pr-babysitter" -o "$HOME/bin/pr-babysitter"
+curl -sL "https://github.com/rjeffman/pr-babysitter/releases/download/v1.1.0/pr-babysitter" -o "$HOME/bin/pr-babysitter"
 chmod +x "$HOME/bin/pr-babysitter"
 ```
 
-Replace `v1.0.0` with the desired release tag.
+Replace `v1.1.0` with the desired release tag.
 
 ### From the main branch
 
@@ -50,9 +50,9 @@ Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you
 
 ```
 pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]
+pr-babysitter [OPTIONS] <REPO> <PR_NUMBER> [PR_NUMBER...]
 pr-babysitter [OPTIONS] -c CHECK_ID [REPO]
 pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]
-pr-babysitter [OPTIONS] -m REPO <PR_NUMBER> [PR_NUMBER...]
 ```
 
 Monitor the status of checks for pull requests on GitHub, Codeberg, or custom Gitea/Forgejo instances. For GitHub, can also directly re-run failed checks/workflows. Supports monitoring multiple PRs simultaneously.
@@ -67,9 +67,37 @@ Desktop notifications will be sent when checks fail (if available).
 
 ## PR Status Indicators
 
+### Color-Coded Display
+
+The tool uses color-coded output for improved readability:
+
+- **PR/MR titles**: Bold white
+- **URLs**: Cyan
+- **Labels**: Magenta
+- **Author names**: Bright yellow
+- **Commit authors**: Bright yellow (in multi-PR mode)
+
+### Overall Status Glyphs
+
+A status glyph appears between the PR number and title to show the overall check status:
+
+- 🔴 **Red Circle** - Failed or canceled checks (no checks running)
+- 🟡 **Yellow Circle** - Failed checks with checks still running
+- ⏳ **Hourglass** - Checks running (no failures)
+- ✅ **Green Checkmark** - All checks passed
+
+**Display format:**
+```
+#123 🔴👀 Feature: Add new authentication system
+Labels: enhancement, needs-review
+https://github.com/owner/repo/pull/123
+Last push: 2026-02-13 14:30:25 by @username
+Author: John Doe (@johndoe)
+```
+
 ### Eyes Emoji 👀
 
-When monitoring a PR, an eyes emoji (👀) appears after the PR title to indicate that the PR has received a recent push that may need review attention.
+When monitoring a PR, an eyes emoji (👀) appears after the status glyph to indicate that the PR has received a recent push that may need review attention.
 
 **The 👀 emoji appears when:**
 - The last push to the PR is more recent than the last updated comment from someone other than the PR author
@@ -80,20 +108,11 @@ When monitoring a PR, an eyes emoji (👀) appears after the PR title to indicat
 - The most recent comment update from others is newer than the last push
 - The PR author's own comments don't count (only comments from reviewers/collaborators matter)
 
-**Display format:**
-```
-PR #123 - Feature: Add new authentication system 👀
-Labels: enhancement, needs-review
-https://github.com/owner/repo/pull/123
-Last push: 2026-02-10 14:30:25
-Checks: 🔵 🔵 ✅ ✅
-```
-
 This helps identify PRs where reviewers should take another look because new changes have been pushed since they last engaged with the PR.
 
 ### Check Status Emojis
 
-The tool uses emoji indicators to show the status of CI/CD checks:
+The tool uses emoji indicators to show the status of individual CI/CD checks:
 
 - ✅ **Success** - Check passed successfully
 - 🔵 **In Progress** - Check is currently running
@@ -136,7 +155,6 @@ No authentication required. The script uses public API endpoints.
   - `github` - GitHub (github.com)
   - `codeberg` - Codeberg (codeberg.org)
   - `https://HOST` - Custom Gitea/Forgejo instance URL
-- `-m REPO` - Monitor multiple PRs for the specified repository
 - `-r MODE` - Re-run mode for failed checks (GitHub only):
   - `ask` - Prompt for re-run option (default)
   - `check` - Re-run individual check runs
@@ -146,12 +164,15 @@ No authentication required. The script uses public API endpoints.
 - `-c CHECK_ID` - Directly re-run a specific check run by ID (GitHub only)
 - `-W WORKFLOW_ID` - Directly re-run a specific workflow run by ID (GitHub only)
 - `-v` - Enable verbose mode
+- `-V` - Show version and exit
 - `-h` - Show this help message
 
 ## Arguments
 
 - `PR_NUMBER` - The pull request number to monitor
-- `REPO` - Optional repository in owner/repo format (defaults to current repo)
+- `REPO` - Repository in owner/repo format (defaults to current repo)
+  - If the first argument is not a number, it's treated as the repository
+  - Multiple PR numbers automatically enable multi-PR monitoring mode
 
 ## Examples
 
@@ -176,13 +197,18 @@ pr-babysitter -s https://git.example.com 123 owner/repo
 
 ### Multi-PR Monitoring
 
+Multi-PR mode is automatically activated when you provide a repository followed by multiple PR numbers:
+
 ```bash
 # GitHub
-pr-babysitter -m owner/repo 123 456 789    # Monitor PRs 123, 456, 789
-pr-babysitter -w 60 -m owner/repo 123 456  # Monitor with 1-minute interval
+pr-babysitter owner/repo 123 456 789       # Monitor PRs 123, 456, 789
+pr-babysitter -w 60 owner/repo 123 456     # Monitor with 1-minute interval
 
 # Codeberg
-pr-babysitter -s codeberg -m owner/repo 123 456 789
+pr-babysitter -s codeberg owner/repo 123 456 789
+
+# You can also use traditional syntax with one PR
+pr-babysitter owner/repo 123               # Same as: pr-babysitter 123 owner/repo
 ```
 
 ### Direct Re-run (GitHub only)
