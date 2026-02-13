@@ -6,6 +6,9 @@ These are common errors that **MUST BE AVOIDED**:
 
 - Prefer putting braces around variable references even when not strictly required.
 - You should not use `echo "${VARIABLE}" | command`, prefer `command <<<"${VARIABLE}"`
+
+These are rules that **ALWAYS APPLY**:
+
 - Always add comments to new functions.
 - If a function is modified, update the function comment, when needed.
 
