@@ -227,6 +227,29 @@ github_api_get() {
         "$@"
 }
 
+# Perform authenticated POST request to GitHub API
+github_api_post() {
+    local endpoint="${1}"
+    shift
+    local api_url
+    api_url=$(get_api_url)
+
+    local token
+    token=$(github_get_token)
+
+    if [ -z "${token:-}" ]; then
+        echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -X POST \
+        -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
+        -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+        -H "Authorization: Bearer ${token}" \
+        "${api_url}${endpoint}" \
+        "$@"
+}
+
 # Perform authenticated GET request to GitLab API
 gitlab_api_get() {
     local endpoint="${1}"
@@ -243,6 +266,27 @@ gitlab_api_get() {
     fi
 
     curl -s -H "PRIVATE-TOKEN: ${token}" \
+        "${api_url}${endpoint}" \
+        "$@"
+}
+
+# Perform authenticated POST request to GitLab API
+gitlab_api_post() {
+    local endpoint="${1}"
+    shift
+    local api_url
+    api_url=$(get_api_url)
+
+    local token
+    token=$(gitlab_get_token)
+
+    if [ -z "${token:-}" ]; then
+        echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
+        return 1
+    fi
+
+    curl -s -X POST \
+        -H "PRIVATE-TOKEN: ${token}" \
         "${api_url}${endpoint}" \
         "$@"
 }
@@ -270,7 +314,7 @@ service_api_get() {
 }
 
 # Perform POST request to service API with appropriate authentication
-gh_api_post() {
+service_api_post() {
     local endpoint="${1}"
     shift
     local api_url
@@ -279,34 +323,10 @@ gh_api_post() {
 
     case "${service}" in
         github)
-            local token
-            token=$(github_get_token)
-
-            if [ -z "${token:-}" ]; then
-                echo "Error: GITHUB_TOKEN or GH_TOKEN environment variable required" >&2
-                return 1
-            fi
-
-            curl -s -X POST \
-                -H "Accept: ${GITHUB_ACCEPT_HEADER}" \
-                -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-                -H "Authorization: Bearer ${token}" \
-                "${api_url}${endpoint}" \
-                "$@"
+            github_api_post "${endpoint}" "$@"
             ;;
         gitlab|https://*gitlab*)
-            local token
-            token=$(gitlab_get_token)
-
-            if [ -z "${token:-}" ]; then
-                echo "Error: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN environment variable required" >&2
-                return 1
-            fi
-
-            curl -s -X POST \
-                -H "PRIVATE-TOKEN: ${token}" \
-                "${api_url}${endpoint}" \
-                "$@"
+            gitlab_api_post "${endpoint}" "$@"
             ;;
         *)
             # Gitea/Forgejo - no authentication
@@ -710,7 +730,7 @@ rerun_check() {
     local repo="${1}"
     local check_run_id="${2}"
 
-    quiet gh_api_post "/repos/${repo}/check-runs/${check_run_id}/rerequest"
+    quiet service_api_post "/repos/${repo}/check-runs/${check_run_id}/rerequest"
 }
 
 # Retrieve detailed information about a specific GitHub check run
@@ -739,7 +759,7 @@ rerun_workflow_run() {
     local repo="${1}"
     local run_id="${2}"
 
-    if ! quiet gh_api_post "/repos/${repo}/actions/runs/${run_id}/rerun"; then
+    if ! quiet service_api_post "/repos/${repo}/actions/runs/${run_id}/rerun"; then
         echo "    Warning: Failed to re-run workflow ${run_id}" >&2
         return 1
     fi
@@ -752,7 +772,7 @@ rerun_failed_jobs() {
     local repo="${1}"
     local run_id="${2}"
 
-    if ! quiet gh_api_post "/repos/${repo}/actions/runs/${run_id}/rerun-failed-jobs"; then
+    if ! quiet service_api_post "/repos/${repo}/actions/runs/${run_id}/rerun-failed-jobs"; then
         echo "    Warning: Failed to re-run failed jobs in workflow ${run_id}" >&2
         return 1
     fi
@@ -837,7 +857,7 @@ add_pr_label() {
     local pr_number="${2}"
     local label="${3}"
 
-    if ! quiet gh_api_post "/repos/${repo}/issues/${pr_number}/labels" \
+    if ! quiet service_api_post "/repos/${repo}/issues/${pr_number}/labels" \
         -H "Content-Type: application/json" \
         -d "{\"labels\":[\"${label}\"]}"
     then
