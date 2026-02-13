@@ -934,10 +934,32 @@ render_pr_summary() {
     local push_timestamp="${7}"
     local commit_author="${8}"
 
-    # Print PR number and title with eyes emoji if applicable (first line)
+    # Determine status glyph based on check states
+    local status_glyph=""
+    local failed_count
+    local active_count
+    local success_count
+    local total_count
+
+    failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${checks_json}")
+    active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${checks_json}")
+    success_count=$(jq "[.[] | select(.state == \"SUCCESS\")] | length" <<<"${checks_json}")
+    total_count=$(jq "length" <<<"${checks_json}")
+
+    if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -gt 0 ]; then
+        status_glyph="🟡"
+    elif [ "${failed_count}" -gt 0 ]; then
+        status_glyph="🔴"
+    elif [ "${active_count}" -gt 0 ]; then
+        status_glyph="⏳"
+    elif [ "${total_count}" -gt 0 ] && [ "${success_count}" -eq "${total_count}" ]; then
+        status_glyph="✅"
+    fi
+
+    # Print PR number, status glyph, eyes emoji, and title (first line)
     # Bold white, folded to 70 characters
     printf "\033[1;37m"
-    fold -w 70 -s <<<"#${pr_number} ${pr_title}${eyes_emoji}"
+    fold -w 70 -s <<<"#${pr_number} ${status_glyph}${eyes_emoji} ${pr_title}"
     printf "\033[0m"
 
     # Print PR labels (next line, only if labels exist)
@@ -1925,13 +1947,30 @@ if [ "${FAILED_ONLY}" = true ]; then
         EYES_EMOJI=" 👀"
     fi
 
+    # Determine status glyph based on check states
+    STATUS_GLYPH=""
+    FAILED_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${CHECKS_JSON}")
+    ACTIVE_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${CHECKS_JSON}")
+    SUCCESS_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"SUCCESS\")] | length" <<<"${CHECKS_JSON}")
+    TOTAL_COUNT_FOR_GLYPH=$(jq "length" <<<"${CHECKS_JSON}")
+
+    if [ "${FAILED_COUNT_FOR_GLYPH}" -gt 0 ] && [ "${ACTIVE_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="🟡"
+    elif [ "${FAILED_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="🔴"
+    elif [ "${ACTIVE_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="⏳"
+    elif [ "${TOTAL_COUNT_FOR_GLYPH}" -gt 0 ] && [ "${SUCCESS_COUNT_FOR_GLYPH}" -eq "${TOTAL_COUNT_FOR_GLYPH}" ]; then
+        STATUS_GLYPH="✅"
+    fi
+
     echo "========================================"
     echo "Failed Checks for PR #${PR_NUMBER}"
     echo "========================================"
     echo ""
-    # Display PR title with eyes emoji in bold white, folded to 70 characters
+    # Display PR title with status glyph and eyes emoji in bold white, folded to 70 characters
     printf "\033[1;37m"
-    fold -w 70 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+    fold -w 70 -s <<<"PR #${PR_NUMBER} ${STATUS_GLYPH}${EYES_EMOJI} ${PR_TITLE}"
     printf "\033[0m"
     # Display labels if any
     if [ -n "${PR_LABELS:-}" ]; then
@@ -1985,12 +2024,32 @@ while true; do
         EYES_EMOJI=" 👀"
     fi
 
-    # Display MR/PR title with eyes emoji in bold white (folded to 70 characters)
+    # Get check status first to determine status glyph
+    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}" "${PR_NUMBER}")
+
+    # Determine status glyph based on check states
+    STATUS_GLYPH=""
+    FAILED_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${CHECKS_JSON}")
+    ACTIVE_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${CHECKS_JSON}")
+    SUCCESS_COUNT_FOR_GLYPH=$(jq "[.[] | select(.state == \"SUCCESS\")] | length" <<<"${CHECKS_JSON}")
+    TOTAL_COUNT_FOR_GLYPH=$(jq "length" <<<"${CHECKS_JSON}")
+
+    if [ "${FAILED_COUNT_FOR_GLYPH}" -gt 0 ] && [ "${ACTIVE_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="🟡"
+    elif [ "${FAILED_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="🔴"
+    elif [ "${ACTIVE_COUNT_FOR_GLYPH}" -gt 0 ]; then
+        STATUS_GLYPH="⏳"
+    elif [ "${TOTAL_COUNT_FOR_GLYPH}" -gt 0 ] && [ "${SUCCESS_COUNT_FOR_GLYPH}" -eq "${TOTAL_COUNT_FOR_GLYPH}" ]; then
+        STATUS_GLYPH="✅"
+    fi
+
+    # Display MR/PR title with status glyph and eyes emoji in bold white (folded to 70 characters)
     printf "\033[1;37m"
     if [ "${SERVICE}" = "gitlab" ] || [[ "${SERVICE}" =~ gitlab ]]; then
-        fold -w 70 -s <<<"MR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+        fold -w 70 -s <<<"MR #${PR_NUMBER} ${STATUS_GLYPH}${EYES_EMOJI} ${PR_TITLE}"
     else
-        fold -w 70 -s <<<"PR #${PR_NUMBER} - ${PR_TITLE}${EYES_EMOJI}"
+        fold -w 70 -s <<<"PR #${PR_NUMBER} ${STATUS_GLYPH}${EYES_EMOJI} ${PR_TITLE}"
     fi
     printf "\033[0m"
 
@@ -2013,9 +2072,6 @@ while true; do
 
     echo "=================================================="
     echo ""
-
-    # Get check status
-    CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}" "${PR_NUMBER}")
 
     # Format and display output
     render_checks <<<"${CHECKS_JSON}"
