@@ -22,7 +22,7 @@ fi
 
 # Note: Token warning will be shown later if using GitHub service
 
-# Usage function
+# Display usage information and command-line options
 usage() {
     echo "Usage: pr-babysitter [OPTIONS] <PR_NUMBER> [REPO]"
     echo "       pr-babysitter [OPTIONS] -c CHECK_ID [REPO]"
@@ -61,6 +61,7 @@ usage() {
     exit 0
 }
 
+# Extract hostname from service identifier (github, codeberg, gitlab, or custom URL)
 get_hostname() {
     local service="${SERVICE:-github}"
 
@@ -89,6 +90,7 @@ get_hostname() {
     esac
 }
 
+# Return the appropriate API base URL for the selected service
 get_api_url() {
     local service="${SERVICE:-github}"
     local hostname
@@ -122,6 +124,7 @@ get_api_url() {
     esac
 }
 
+# Construct the PR/MR web URL based on service type
 get_pr_url() {
     local repo="${1}"
     local pr_number="${2}"
@@ -151,14 +154,17 @@ get_pr_url() {
     esac
 }
 
+# Retrieve GitHub authentication token from environment variables
 github_get_token() {
     echo "${GITHUB_TOKEN:-${GH_TOKEN}}"
 }
 
+# Retrieve GitLab authentication token from environment variables
 gitlab_get_token() {
     echo "${GITLAB_TOKEN:-${GITLAB_ACCESS_TOKEN}}"
 }
 
+# Return project identifier (URL-encoded for GitLab, plain for others)
 get_project_id() {
     local repo="${1}"
     local service="${SERVICE:-github}"
@@ -175,6 +181,7 @@ get_project_id() {
     esac
 }
 
+# Extract repository owner/name from git remote URL
 get_repo_from_git() {
     # Try to extract repository from git remote URL
     local remote_url
@@ -198,6 +205,7 @@ get_repo_from_git() {
     return 1
 }
 
+# Perform authenticated GET request to GitHub API
 github_api_get() {
     local endpoint="${1}"
     shift
@@ -219,6 +227,7 @@ github_api_get() {
         "$@"
 }
 
+# Perform authenticated GET request to GitLab API
 gitlab_api_get() {
     local endpoint="${1}"
     shift
@@ -238,6 +247,7 @@ gitlab_api_get() {
         "$@"
 }
 
+# Perform GET request to service API with appropriate authentication
 service_api_get() {
     local endpoint="${1}"
     shift
@@ -259,6 +269,7 @@ service_api_get() {
     esac
 }
 
+# Perform POST request to service API with appropriate authentication
 gh_api_post() {
     local endpoint="${1}"
     shift
@@ -304,6 +315,7 @@ gh_api_post() {
     esac
 }
 
+# Retrieve the latest commit SHA for a PR/MR
 get_pr_head_sha() {
     local pr_number="${1}"
     local repo="${2}"
@@ -321,6 +333,7 @@ get_pr_head_sha() {
     esac
 }
 
+# Retrieve the title of a PR/MR
 get_pr_title() {
     local pr_number="${1}"
     local repo="${2}"
@@ -338,6 +351,7 @@ get_pr_title() {
     esac
 }
 
+# Retrieve the author username of a PR/MR
 get_pr_author() {
     local pr_number="${1}"
     local repo="${2}"
@@ -355,6 +369,7 @@ get_pr_author() {
     esac
 }
 
+# Convert ISO 8601 timestamp to YYYY-MM-DD HH:MM:SS format
 format_timestamp() {
     local iso8601_timestamp="${1}"
 
@@ -367,6 +382,7 @@ format_timestamp() {
     date -d "${iso8601_timestamp}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo ""
 }
 
+# Retrieve and format the commit timestamp for PR/MR head SHA
 get_pr_head_commit_timestamp() {
     local pr_number="${1}"
     local repo="${2}"
@@ -393,6 +409,7 @@ get_pr_head_commit_timestamp() {
     format_timestamp "${iso_timestamp}"
 }
 
+# Retrieve all comments for a PR/MR
 get_pr_comments() {
     local pr_number="${1}"
     local repo="${2}"
@@ -423,6 +440,7 @@ get_pr_comments() {
     esac
 }
 
+# Get timestamp of most recent comment not by the PR/MR author
 get_latest_non_author_comment_timestamp() {
     local pr_number="${1}"
     local repo="${2}"
@@ -457,6 +475,7 @@ get_latest_non_author_comment_timestamp() {
     format_timestamp "${latest_timestamp}"
 }
 
+# Determine if eyes emoji should be added (push is newer than last comment)
 should_add_eyes_emoji() {
     local push_timestamp="${1}"
     local latest_comment_timestamp="${2}"
@@ -482,6 +501,7 @@ should_add_eyes_emoji() {
     [ "${push_epoch}" -gt "${comment_epoch}" ]
 }
 
+# Retrieve comma-separated list of labels for a PR/MR
 get_pr_labels() {
     local pr_number="${1}"
     local repo="${2}"
@@ -499,6 +519,7 @@ get_pr_labels() {
     esac
 }
 
+# Fetch and normalize GitHub check runs to standard format
 github_check_runs() {
     local repo="${1}"
     local ref="${2}"
@@ -525,6 +546,7 @@ github_check_runs() {
     }]'
 }
 
+# Fetch and normalize GitLab pipeline jobs and commit statuses to standard format
 gitlab_check_runs() {
     local repo="${1}"
     local ref="${2}"
@@ -624,6 +646,7 @@ gitlab_check_runs() {
         '$pipelines + $external'
 }
 
+# Fetch and normalize Gitea/Forgejo commit statuses to standard format
 forgejo_check_runs() {
     local repo="${1}"
     local ref="${2}"
@@ -647,6 +670,7 @@ forgejo_check_runs() {
     }]'
 }
 
+# Retrieve check runs for a commit, dispatching to appropriate service
 get_check_runs() {
     local repo="${1}"
     local ref="${2}"
@@ -666,6 +690,7 @@ get_check_runs() {
     esac
 }
 
+# Execute command silently unless verbose mode is enabled
 quiet() {
     local err=0
     if [[ "${VERBOSE:-}" = "YES" ]]; then
@@ -680,6 +705,7 @@ quiet() {
     return "${err}"
 }
 
+# Request re-run of a specific GitHub check run by ID
 rerun_check() {
     local repo="${1}"
     local check_run_id="${2}"
@@ -687,6 +713,7 @@ rerun_check() {
     quiet gh_api_post "/repos/${repo}/check-runs/${check_run_id}/rerequest"
 }
 
+# Retrieve detailed information about a specific GitHub check run
 get_check_run_details() {
     local repo="${1}"
     local check_run_id="${2}"
@@ -694,6 +721,7 @@ get_check_run_details() {
     service_api_get "/repos/${repo}/check-runs/${check_run_id}" 2>/dev/null || return 1
 }
 
+# Extract GitHub Actions workflow run ID from a check run
 get_workflow_run_id_from_check() {
     local repo="${1}"
     local check_run_id="${2}"
@@ -706,6 +734,7 @@ get_workflow_run_id_from_check() {
     jq -r '.html_url' <<<"${details}" | grep -oP 'runs/\K[0-9]+' | head -1 || return 1
 }
 
+# Request re-run of an entire GitHub Actions workflow run
 rerun_workflow_run() {
     local repo="${1}"
     local run_id="${2}"
@@ -718,6 +747,7 @@ rerun_workflow_run() {
     return 0
 }
 
+# Request re-run of only failed jobs in a GitHub Actions workflow run
 rerun_failed_jobs() {
     local repo="${1}"
     local run_id="${2}"
@@ -730,6 +760,7 @@ rerun_failed_jobs() {
     return 0
 }
 
+# Format and display check runs with emoji indicators and optional links
 render_checks() {
     FILTER="${1:-"true"}"
     # Note that the sorting is done so that SUCCESS is the last item.
@@ -754,6 +785,7 @@ render_checks() {
         (if .state == \"FAILURE\" or .state == \"IN_PROGRESS\" then \"\\n\\(.link)\" else \"\" end)"
 }
 
+# Render compact 3-4 line PR/MR summary with emoji-only check status
 render_pr_summary() {
     local pr_number="${1}"
     local pr_title="${2}"
@@ -799,6 +831,7 @@ render_pr_summary() {
     echo ""
 }
 
+# Add a label to a GitHub PR
 add_pr_label() {
     local repo="${1}"
     local pr_number="${2}"
@@ -815,6 +848,7 @@ add_pr_label() {
     return 0
 }
 
+# Send desktop notification when checks fail
 send_desktop_notification() {
     local failed_count="${1}"
     local pr_title="${2}"
@@ -834,6 +868,7 @@ send_desktop_notification() {
         "${failed_count} check(s) failed for:\n${pr_title}"
 }
 
+# Send desktop notification when all checks pass
 send_success_notification() {
     local pr_title="${1}"
 
@@ -846,6 +881,7 @@ send_success_notification() {
         "All checks passed successfully for:\n${pr_title}"
 }
 
+# Re-run individual failed GitHub check runs
 github_rerun_check() {
     local repo="${1}"
     local checks_json="${2}"
@@ -861,6 +897,7 @@ github_rerun_check() {
     done
 }
 
+# Re-run entire GitHub Actions workflow runs for failed checks
 github_rerun_workflow() {
     local repo="${1}"
     local checks_json="${2}"
@@ -892,6 +929,7 @@ github_rerun_workflow() {
     fi
 }
 
+# Re-run only failed jobs in GitHub Actions workflow runs
 github_rerun_failed_jobs() {
     local repo="${1}"
     local checks_json="${2}"
@@ -923,6 +961,7 @@ github_rerun_failed_jobs() {
     fi
 }
 
+# Prompt for and add a label to a GitHub PR to trigger re-runs
 github_rerun_label() {
     local repo="${1}"
     local pr_number="${2}"
@@ -937,6 +976,7 @@ github_rerun_label() {
     fi
 }
 
+# Prompt user to select a re-run strategy or return preset mode
 ask_rerun_option() {
     local rerun_mode="${1}"
 
@@ -981,6 +1021,7 @@ ask_rerun_option() {
     esac
 }
 
+# Execute GitHub check re-run action based on user selection or preset mode
 github_rerun_action() {
     local service="${SERVICE:-github}"
 
@@ -1023,6 +1064,7 @@ github_rerun_action() {
     echo "Done."
 }
 
+# Monitor multiple PRs/MRs simultaneously with compact status display
 monitor_multiple_prs() {
     local repo="${1}"
     shift
@@ -1403,6 +1445,7 @@ monitor_multiple_prs() {
     done
 }
 
+# Verify required dependencies are installed and available
 check_dependencies() {
     MISSING=0
 
