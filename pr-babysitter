@@ -422,6 +422,48 @@ github_get_pr_author_display() {
     echo "${user_data}" | jq -r '(.name // .login) + " (@" + .login + ")"'
 }
 
+# Retrieve author display name as "Name (@username)" for Forgejo/Gitea PR
+forgejo_get_pr_author_display() {
+    local pr_number="${1}"
+    local repo="${2}"
+
+    # Get the username from the PR
+    local username
+    username=$(service_api_get "/repos/${repo}/pulls/${pr_number}" | jq -r '.user.login')
+
+    if [ -z "${username:-}" ] || [ "${username}" = "null" ]; then
+        echo ""
+        return
+    fi
+
+    # Get the full user details from the users endpoint
+    local user_data
+    user_data=$(service_api_get "/users/${username}")
+
+    # Return formatted name using full_name field
+    echo "${user_data}" | jq -r '(.full_name // .login) + " (@" + .login + ")"'
+}
+
+# Retrieve author display name as "Name (@username)" for any service
+service_get_pr_author_display() {
+    local pr_number="${1}"
+    local repo="${2}"
+    local service="${SERVICE:-github}"
+
+    case "${service}" in
+        gitlab|https://*gitlab*)
+            gitlab_get_pr_author_display "${pr_number}" "${repo}"
+            ;;
+        github)
+            github_get_pr_author_display "${pr_number}" "${repo}"
+            ;;
+        *)
+            # Forgejo/Gitea or other services
+            forgejo_get_pr_author_display "${pr_number}" "${repo}"
+            ;;
+    esac
+}
+
 # Retrieve the username of the author of a specific commit
 get_commit_author_username() {
     local repo="${1}"
@@ -1855,11 +1897,7 @@ PR_LABELS=$(get_pr_labels "${PR_NUMBER}" "${REPO}")
 PR_AUTHOR=$(get_pr_author "${PR_NUMBER}" "${REPO}")
 
 # Get the PR author display name
-if [ "${SERVICE}" = "gitlab" ] || [[ "${SERVICE}" =~ gitlab ]]; then
-    PR_AUTHOR_DISPLAY=$(gitlab_get_pr_author_display "${PR_NUMBER}" "${REPO}")
-else
-    PR_AUTHOR_DISPLAY=$(github_get_pr_author_display "${PR_NUMBER}" "${REPO}")
-fi
+PR_AUTHOR_DISPLAY=$(service_get_pr_author_display "${PR_NUMBER}" "${REPO}")
 
 # ANSI color codes
 # shellcheck disable=SC2034
