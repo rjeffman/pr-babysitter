@@ -99,7 +99,7 @@ The tool uses emoji indicators to show the status of CI/CD checks:
 - 🔵 **In Progress** - Check is currently running
 - 🧵 **Queued** - Check is waiting to start
 - 🚨 **Failure** - Check failed
-- ✖️ **Canceled** - Check was canceled
+- 🚫 **Canceled** - Check was canceled
 - ❓ **Unknown** - Check status is unknown or could not be determined
 
 ## Configuration
