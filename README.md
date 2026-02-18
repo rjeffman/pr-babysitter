@@ -5,16 +5,16 @@ A CLI tool to monitor and restart failed checks in GitHub pull requests. Also su
 
 ## Installation
 
-You can install `pr-babysitter` by downloading the script using `curl` and placing it in a directory within your `$HOME` path, such as `~/bin`.
+You can install `pr-babysitter` by downloading the script using `curl` and placing it in a directory within your `$HOME` path, such as `~/.local/bin`.
 
 ### From a release tag
 
 To install a specific version from a release tag (e.g., `v1.1.0`), use the following command:
 
 ```bash
-mkdir -p "$HOME/bin"
-curl -sL "https://github.com/rjeffman/pr-babysitter/releases/download/v1.1.0/pr-babysitter" -o "$HOME/bin/pr-babysitter"
-chmod +x "$HOME/bin/pr-babysitter"
+mkdir -p "$HOME/.local/bin"
+curl -sL "https://raw.githubusercontent.com/rjeffman/pr-babysitter/refs/tags/v1.1.0/pr-babysitter" -o "$HOME/.local/bin/pr-babysitter"
+chmod +x "$HOME/.local/bin/pr-babysitter"
 ```
 
 Replace `v1.1.0` with the desired release tag.
@@ -24,12 +24,12 @@ Replace `v1.1.0` with the desired release tag.
 To install the latest version directly from the `main` branch, use:
 
 ```bash
-mkdir -p "$HOME/bin"
-curl -sL "https://raw.githubusercontent.com/rjeffman/pr-babysitter/main/pr-babysitter" -o "$HOME/bin/pr-babysitter"
-chmod +x "$HOME/bin/pr-babysitter"
+mkdir -p "$HOME/.local/bin"
+curl -sL "https://raw.githubusercontent.com/rjeffman/pr-babysitter/main/pr-babysitter" -o "$HOME/.local/bin/pr-babysitter"
+chmod +x "$HOME/.local/bin/pr-babysitter"
 ```
 
-Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you might need to add it to your shell's configuration file (e.g., `.bashrc`, `.zshrc`) like so: `export PATH="$HOME/bin:$PATH"`.
+Ensure that `~/.local/bin` is in your system's `PATH` environment variable, most Linuxes do so by default. If not, you might need to add it to your shell's configuration file (e.g., `.bashrc`, `.zshrc`) like so: `export PATH="$HOME/.local/bin:$PATH"`.
 
 ## Dependencies
 
