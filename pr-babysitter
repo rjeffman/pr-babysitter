@@ -1433,12 +1433,85 @@ monitor_multiple_prs() {
 
         if [ "${has_restartable_failures}" = true ] && [ "${SERVICE}" = "github" ]; then
             echo "Press 'R' to restart failed checks"
+            echo "Press 'D' to view PR details"
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
             # Wait for input with timeout
             if read -t "${WAIT_TIME}" -n 1 -s -r key; then
-                if [[ "${key}" == "R" ]] || [[ "${key}" == "r" ]]; then
+                if [[ "${key}" == "D" ]] || [[ "${key}" == "d" ]]; then
+                    # Clear screen before showing PR details
+                    clear
+
+                    echo "=================================================="
+                    echo "PR Details"
+                    echo "=================================================="
+
+                    # Use select to let user choose a PR
+                    echo ""
+                    echo "Select a PR to view details:"
+                    local selected_pr_number=""
+                    select pr_choice in "${pr_numbers[@]}"; do
+                        if [ -n "${pr_choice:-}" ]; then
+                            selected_pr_number="${pr_choice}"
+                            break
+                        else
+                            echo "Invalid selection. Please try again."
+                        fi
+                    done
+                    echo ""
+
+                    if [ -n "${selected_pr_number:-}" ]; then
+                        # Display detailed status for the selected PR
+                        if [ "${pr_checks[${selected_pr_number}]:-null}" != "null" ]; then
+                            echo "=================================================="
+                            # Display PR title in bold white (folded to 70 characters)
+                            printf "\033[1;37m"
+                            fold -w 70 -s <<<"PR #${selected_pr_number} - ${pr_titles[${selected_pr_number}]}"
+                            printf "\033[0m"
+                            # Display labels if any
+                            if [ -n "${pr_labels[${selected_pr_number}]:-}" ]; then
+                                printf "Labels: \033[35m%s\033[0m\n" "${pr_labels[${selected_pr_number}]}"
+                            fi
+                            local pr_url
+                            pr_url=$(get_pr_url "${repo}" "${selected_pr_number}")
+                            printf "\033[36m%s\033[0m\n" "${pr_url}"
+                            # Display last push timestamp
+                            if [ -n "${pr_push_timestamps[${selected_pr_number}]:-}" ]; then
+                                if [ -n "${pr_commit_authors[${selected_pr_number}]:-}" ]; then
+                                    printf "Last push: %s by \033[1;33m@%s\033[0m\n" "${pr_push_timestamps[${selected_pr_number}]}" "${pr_commit_authors[${selected_pr_number}]}"
+                                else
+                                    echo "Last push: ${pr_push_timestamps[${selected_pr_number}]}"
+                                fi
+                            fi
+                            # Display author display name
+                            local pr_author_display
+                            pr_author_display=$(service_get_pr_author_display "${selected_pr_number}" "${repo}" 2>/dev/null || echo "")
+                            if [ -n "${pr_author_display:-}" ]; then
+                                printf "Author: \033[1;33m%s\033[0m\n" "${pr_author_display}"
+                            fi
+                            echo "=================================================="
+                            echo ""
+
+                            # Display detailed check status
+                            render_checks <<<"${pr_checks[${selected_pr_number}]}"
+
+                            echo ""
+                            echo "-----------------------------------"
+                        else
+                            echo "Error: Could not retrieve checks for PR #${selected_pr_number}"
+                            echo ""
+                            echo "-----------------------------------"
+                        fi
+
+                        echo ""
+                        echo "Press ENTER to return to monitoring..."
+                        read -r
+                        echo ""
+                        echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                        echo ""
+                    fi
+                elif [[ "${key}" == "R" ]] || [[ "${key}" == "r" ]]; then
                     # Clear screen before showing restart options
                     clear
 
@@ -1580,76 +1653,208 @@ monitor_multiple_prs() {
             fi
         elif [ "${has_restartable_failures}" = true ]; then
             # Failures exist but service doesn't support re-runs
-            echo "Press 'D' to view detailed status"
+            echo "Press 'D' to view PR/MR details"
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
             # Wait for input with timeout
             if read -t "${WAIT_TIME}" -n 1 -s -r key; then
                 if [[ "${key}" == "D" ]] || [[ "${key}" == "d" ]]; then
-                    # Clear screen before showing detailed status
+                    # Clear screen before showing PR details
                     clear
 
                     echo "=================================================="
-                    echo "Detailed Status"
+                    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                        echo "MR Details"
+                    else
+                        echo "PR Details"
+                    fi
                     echo "=================================================="
 
-                    # Show detailed status for each PR/MR that has failures
-                    for pr_number in "${pr_numbers[@]}"; do
-                        if [ "${pr_checks[${pr_number}]:-null}" != "null" ]; then
-                            local failed_count
-                            local active_count
-                            failed_count=$(jq "[.[] | select(.state == \"FAILURE\" or .state == \"CANCELED\")] | length" <<<"${pr_checks[${pr_number}]}")
-                            active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${pr_checks[${pr_number}]}")
-
-                            if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
-                                echo ""
-                                echo "=================================================="
-                                # Display PR/MR title in bold white (folded to 70 characters)
-                                printf "\033[1;37m"
-                                if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
-                                    fold -w 70 -s <<<"MR #${pr_number} - ${pr_titles[${pr_number}]}"
-                                else
-                                    fold -w 70 -s <<<"PR #${pr_number} - ${pr_titles[${pr_number}]}"
-                                fi
-                                printf "\033[0m"
-                                # Display labels if any
-                                if [ -n "${pr_labels[${pr_number}]:-}" ]; then
-                                    printf "Labels: \033[35m%s\033[0m\n" "${pr_labels[${pr_number}]}"
-                                fi
-                                local pr_url
-                                pr_url=$(get_pr_url "${repo}" "${pr_number}")
-                                printf "\033[36m%s\033[0m\n" "${pr_url}"
-                                echo "=================================================="
-                                echo ""
-
-                                # Display detailed check status
-                                render_checks <<<"${pr_checks[${pr_number}]}"
-
-                                echo ""
-                                echo "-----------------------------------"
-                            fi
-                        fi
-                    done
-
-                    echo ""
-                    echo "Press ENTER to return to monitoring..."
-                    read -r
+                    # Use select to let user choose a PR/MR
                     echo ""
                     if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
-                        echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                        echo "Select an MR to view details:"
                     else
-                        echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                        echo "Select a PR to view details:"
                     fi
+                    local selected_pr_number=""
+                    select pr_choice in "${pr_numbers[@]}"; do
+                        if [ -n "${pr_choice:-}" ]; then
+                            selected_pr_number="${pr_choice}"
+                            break
+                        else
+                            echo "Invalid selection. Please try again."
+                        fi
+                    done
                     echo ""
+
+                    if [ -n "${selected_pr_number:-}" ]; then
+                        # Display detailed status for the selected PR/MR
+                        if [ "${pr_checks[${selected_pr_number}]:-null}" != "null" ]; then
+                            echo "=================================================="
+                            # Display PR/MR title in bold white (folded to 70 characters)
+                            printf "\033[1;37m"
+                            if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                                fold -w 70 -s <<<"MR #${selected_pr_number} - ${pr_titles[${selected_pr_number}]}"
+                            else
+                                fold -w 70 -s <<<"PR #${selected_pr_number} - ${pr_titles[${selected_pr_number}]}"
+                            fi
+                            printf "\033[0m"
+                            # Display labels if any
+                            if [ -n "${pr_labels[${selected_pr_number}]:-}" ]; then
+                                printf "Labels: \033[35m%s\033[0m\n" "${pr_labels[${selected_pr_number}]}"
+                            fi
+                            local pr_url
+                            pr_url=$(get_pr_url "${repo}" "${selected_pr_number}")
+                            printf "\033[36m%s\033[0m\n" "${pr_url}"
+                            # Display last push timestamp
+                            if [ -n "${pr_push_timestamps[${selected_pr_number}]:-}" ]; then
+                                if [ -n "${pr_commit_authors[${selected_pr_number}]:-}" ]; then
+                                    printf "Last push: %s by \033[1;33m@%s\033[0m\n" "${pr_push_timestamps[${selected_pr_number}]}" "${pr_commit_authors[${selected_pr_number}]}"
+                                else
+                                    echo "Last push: ${pr_push_timestamps[${selected_pr_number}]}"
+                                fi
+                            fi
+                            # Display author display name
+                            local pr_author_display
+                            pr_author_display=$(service_get_pr_author_display "${selected_pr_number}" "${repo}" 2>/dev/null || echo "")
+                            if [ -n "${pr_author_display:-}" ]; then
+                                printf "Author: \033[1;33m%s\033[0m\n" "${pr_author_display}"
+                            fi
+                            echo "=================================================="
+                            echo ""
+
+                            # Display detailed check status
+                            render_checks <<<"${pr_checks[${selected_pr_number}]}"
+
+                            echo ""
+                            echo "-----------------------------------"
+                        else
+                            if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                                echo "Error: Could not retrieve checks for MR #${selected_pr_number}"
+                            else
+                                echo "Error: Could not retrieve checks for PR #${selected_pr_number}"
+                            fi
+                            echo ""
+                            echo "-----------------------------------"
+                        fi
+
+                        echo ""
+                        echo "Press ENTER to return to monitoring..."
+                        read -r
+                        echo ""
+                        if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                            echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                        else
+                            echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                        fi
+                        echo ""
+                    fi
                 fi
             fi
         else
+            # No failures, but checks are still running
+            echo "Press 'D' to view PR details"
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
-            # Wait before next check
-            sleep "${WAIT_TIME}"
+            # Wait for input with timeout
+            if read -t "${WAIT_TIME}" -n 1 -s -r key; then
+                if [[ "${key}" == "D" ]] || [[ "${key}" == "d" ]]; then
+                    # Clear screen before showing PR details
+                    clear
+
+                    echo "=================================================="
+                    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                        echo "MR Details"
+                    else
+                        echo "PR Details"
+                    fi
+                    echo "=================================================="
+
+                    # Use select to let user choose a PR/MR
+                    echo ""
+                    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                        echo "Select an MR to view details:"
+                    else
+                        echo "Select a PR to view details:"
+                    fi
+                    local selected_pr_number=""
+                    select pr_choice in "${pr_numbers[@]}"; do
+                        if [ -n "${pr_choice:-}" ]; then
+                            selected_pr_number="${pr_choice}"
+                            break
+                        else
+                            echo "Invalid selection. Please try again."
+                        fi
+                    done
+                    echo ""
+
+                    if [ -n "${selected_pr_number:-}" ]; then
+                        # Display detailed status for the selected PR/MR
+                        if [ "${pr_checks[${selected_pr_number}]:-null}" != "null" ]; then
+                            echo "=================================================="
+                            # Display PR/MR title in bold white (folded to 70 characters)
+                            printf "\033[1;37m"
+                            if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                                fold -w 70 -s <<<"MR #${selected_pr_number} - ${pr_titles[${selected_pr_number}]}"
+                            else
+                                fold -w 70 -s <<<"PR #${selected_pr_number} - ${pr_titles[${selected_pr_number}]}"
+                            fi
+                            printf "\033[0m"
+                            # Display labels if any
+                            if [ -n "${pr_labels[${selected_pr_number}]:-}" ]; then
+                                printf "Labels: \033[35m%s\033[0m\n" "${pr_labels[${selected_pr_number}]}"
+                            fi
+                            local pr_url
+                            pr_url=$(get_pr_url "${repo}" "${selected_pr_number}")
+                            printf "\033[36m%s\033[0m\n" "${pr_url}"
+                            # Display last push timestamp
+                            if [ -n "${pr_push_timestamps[${selected_pr_number}]:-}" ]; then
+                                if [ -n "${pr_commit_authors[${selected_pr_number}]:-}" ]; then
+                                    printf "Last push: %s by \033[1;33m@%s\033[0m\n" "${pr_push_timestamps[${selected_pr_number}]}" "${pr_commit_authors[${selected_pr_number}]}"
+                                else
+                                    echo "Last push: ${pr_push_timestamps[${selected_pr_number}]}"
+                                fi
+                            fi
+                            # Display author display name
+                            local pr_author_display
+                            pr_author_display=$(service_get_pr_author_display "${selected_pr_number}" "${repo}" 2>/dev/null || echo "")
+                            if [ -n "${pr_author_display:-}" ]; then
+                                printf "Author: \033[1;33m%s\033[0m\n" "${pr_author_display}"
+                            fi
+                            echo "=================================================="
+                            echo ""
+
+                            # Display detailed check status
+                            render_checks <<<"${pr_checks[${selected_pr_number}]}"
+
+                            echo ""
+                            echo "-----------------------------------"
+                        else
+                            if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                                echo "Error: Could not retrieve checks for MR #${selected_pr_number}"
+                            else
+                                echo "Error: Could not retrieve checks for PR #${selected_pr_number}"
+                            fi
+                            echo ""
+                            echo "-----------------------------------"
+                        fi
+
+                        echo ""
+                        echo "Press ENTER to return to monitoring..."
+                        read -r
+                        echo ""
+                        if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                            echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                        else
+                            echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
+                        fi
+                        echo ""
+                    fi
+                fi
+            fi
         fi
     done
 }
