@@ -296,6 +296,77 @@ gitlab_api_post() {
         "$@"
 }
 
+# Cancel a running GitLab pipeline
+gitlab_cancel_pipeline() {
+    local repo="${1}"
+    local pipeline_id="${2}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    echo "  Canceling pipeline ${pipeline_id}..."
+    local result
+    result=$(gitlab_api_post "/projects/${project_id}/pipelines/${pipeline_id}/cancel")
+
+    if echo "${result}" | jq -e '.status' >/dev/null 2>&1; then
+        echo "  ✓ Pipeline ${pipeline_id} canceled"
+        return 0
+    else
+        echo "  ✗ Failed to cancel pipeline ${pipeline_id}"
+        return 1
+    fi
+}
+
+# Get target branch for GitLab MR
+gitlab_get_mr_target_branch() {
+    local mr_number="${1}"
+    local repo="${2}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    local mr_data
+    mr_data=$(gitlab_api_get "/projects/${project_id}/merge_requests/${mr_number}")
+
+    echo "${mr_data}" | jq -r '.source_branch // empty'
+}
+
+# Create/trigger a new GitLab pipeline for an MR
+gitlab_create_pipeline() {
+    local repo="${1}"
+    local mr_number="${2}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    # Get the source branch from the MR
+    local source_branch
+    source_branch=$(gitlab_get_mr_target_branch "${mr_number}" "${repo}")
+
+    if [ -z "${source_branch}" ]; then
+        echo "  ✗ Could not determine source branch for MR #${mr_number}"
+        return 1
+    fi
+
+    echo "  Creating new pipeline for branch '${source_branch}'..."
+    local result
+    result=$(gitlab_api_post "/projects/${project_id}/pipeline" \
+        -H "Content-Type: application/json" \
+        -d "{\"ref\":\"${source_branch}\"}")
+
+    if echo "${result}" | jq -e '.id' >/dev/null 2>&1; then
+        local new_pipeline_id
+        new_pipeline_id=$(echo "${result}" | jq -r '.id')
+        echo "  ✓ New pipeline created: ${new_pipeline_id}"
+        return 0
+    else
+        echo "  ✗ Failed to create pipeline"
+        if echo "${result}" | jq -e '.message' >/dev/null 2>&1; then
+            local error_msg
+            error_msg=$(echo "${result}" | jq -r '.message')
+            echo "  Error: ${error_msg}"
+        fi
+        return 1
+    fi
+}
+
 # Perform GET request to service API with appropriate authentication
 service_api_get() {
     local endpoint="${1}"
@@ -1218,6 +1289,63 @@ ask_rerun_option() {
     esac
 }
 
+# Execute GitLab pipeline restart action
+gitlab_restart_pipeline() {
+    # Check if there are any failed pipelines (only FAILURE state, not CANCELED or UNKNOWN)
+    local failed_pipelines
+    failed_pipelines=$(jq -r '[.[] | select(.state == "FAILURE") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${CHECKS_JSON}")
+
+    if [ -z "${failed_pipelines}" ]; then
+        echo ""
+        echo "No failed pipelines to restart."
+        return 0
+    fi
+
+    echo ""
+    echo "Restart failed pipeline?"
+    echo "  y) Yes - Cancel active pipelines and create new pipeline"
+    echo "  n) No - Skip restart"
+    echo ""
+    read -p "Select option (y/n): " -n 1 -r
+    echo ""
+
+    case ${REPLY} in
+        [Yy])
+            echo ""
+            if [ -n "${failed_pipelines}" ]; then
+                # Get active pipeline IDs
+                local active_pipelines
+                active_pipelines=$(jq -r '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${CHECKS_JSON}")
+
+                # Cancel active pipelines first
+                if [ -n "${active_pipelines}" ]; then
+                    echo "Canceling active pipelines..."
+                    while IFS= read -r pipeline_id; do
+                        gitlab_cancel_pipeline "${REPO}" "${pipeline_id}" || true
+                    done <<<"${active_pipelines}"
+                    echo ""
+                fi
+
+                # Create new pipeline
+                echo "Creating new pipeline for MR #${PR_NUMBER}..."
+                gitlab_create_pipeline "${REPO}" "${PR_NUMBER}" || true
+            else
+                echo "No failed GitLab CI pipelines found."
+            fi
+            ;;
+        [Nn])
+            echo "Skipping pipeline restart."
+            return 0
+            ;;
+        *)
+            echo "Invalid option. Skipping pipeline restart."
+            return 0
+            ;;
+    esac
+
+    echo "Done."
+}
+
 # Execute GitHub check re-run action based on user selection or preset mode
 github_rerun_action() {
     local service="${SERVICE:-github}"
@@ -1394,6 +1522,7 @@ monitor_multiple_prs() {
 
         # Check overall status across all PRs
         local has_restartable_failures=false
+        local has_gitlab_restartable_pipelines=false
         local all_checks_successful=true
 
         for pr_number in "${pr_numbers[@]}"; do
@@ -1410,6 +1539,15 @@ monitor_multiple_prs() {
                 # Check if this PR has failed checks with no active checks
                 if [ "${failed_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
                     has_restartable_failures=true
+                fi
+
+                # For GitLab, check if there are FAILURE-state pipelines (not CANCELED or UNKNOWN)
+                if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                    local failed_pipeline_count
+                    failed_pipeline_count=$(jq "[.[] | select(.state == \"FAILURE\") | select(.appName == \"GitLab CI\")] | length" <<<"${pr_checks[${pr_number}]}")
+                    if [ "${failed_pipeline_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
+                        has_gitlab_restartable_pipelines=true
+                    fi
                 fi
 
                 # Check if this PR has all checks successful
@@ -1653,7 +1791,14 @@ monitor_multiple_prs() {
             fi
         elif [ "${has_restartable_failures}" = true ]; then
             # Failures exist but service doesn't support re-runs
-            echo "Press 'D' to view PR/MR details"
+            if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                if [ "${has_gitlab_restartable_pipelines}" = true ]; then
+                    echo "Press 'R' to restart failed pipelines"
+                fi
+                echo "Press 'D' to view MR details"
+            else
+                echo "Press 'D' to view PR/MR details"
+            fi
             echo "Press Ctrl+C to stop monitoring"
             echo "-----------------------------------"
 
@@ -1750,6 +1895,87 @@ monitor_multiple_prs() {
                             echo "Retrieving data for ${#pr_numbers[@]} PRs in ${repo}..."
                         fi
                         echo ""
+                    fi
+                elif [[ "${key}" == "R" ]] || [[ "${key}" == "r" ]]; then
+                    # Restart failed pipelines (GitLab only)
+                    if [ "${service}" = "gitlab" ] || [[ "${service}" =~ gitlab ]]; then
+                        # Only proceed if there are restartable pipelines
+                        if [ "${has_gitlab_restartable_pipelines}" = true ]; then
+                            # Clear screen before showing restart options
+                            clear
+
+                            echo "=================================================="
+                            echo "Restart Failed Pipelines"
+                            echo "=================================================="
+
+                        # Restart pipelines for each MR that has failures
+                        for pr_number in "${pr_numbers[@]}"; do
+                            if [ "${pr_checks[${pr_number}]:-null}" != "null" ]; then
+                                # Only count FAILURE state for pipeline restarts (not CANCELED or UNKNOWN)
+                                local failed_pipeline_count
+                                local active_count
+                                failed_pipeline_count=$(jq "[.[] | select(.state == \"FAILURE\") | select(.appName == \"GitLab CI\")] | length" <<<"${pr_checks[${pr_number}]}")
+                                active_count=$(jq "[.[] | select(.state == \"IN_PROGRESS\" or .state == \"QUEUED\")] | length" <<<"${pr_checks[${pr_number}]}")
+
+                                if [ "${failed_pipeline_count}" -gt 0 ] && [ "${active_count}" -eq 0 ]; then
+                                    echo ""
+                                    echo "=================================================="
+                                    # Display MR title in bold white (folded to 70 characters)
+                                    printf "\033[1;37m"
+                                    fold -w 70 -s <<<"MR #${pr_number} - ${pr_titles[${pr_number}]}"
+                                    printf "\033[0m"
+                                    # Display labels if any
+                                    if [ -n "${pr_labels[${pr_number}]:-}" ]; then
+                                        printf "Labels: \033[35m%s\033[0m\n" "${pr_labels[${pr_number}]}"
+                                    fi
+                                    local pr_url
+                                    pr_url=$(get_pr_url "${repo}" "${pr_number}")
+                                    printf "\033[36m%s\033[0m\n" "${pr_url}"
+                                    echo "=================================================="
+                                    echo ""
+
+                                    # Get failed pipeline IDs (only FAILURE state, not CANCELED or UNKNOWN)
+                                    local failed_pipelines
+                                    failed_pipelines=$(jq -r '[.[] | select(.state == "FAILURE") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${pr_checks[${pr_number}]}")
+
+                                    if [ -n "${failed_pipelines}" ]; then
+                                        # Get active pipeline IDs
+                                        local active_pipelines
+                                        active_pipelines=$(jq -r '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${pr_checks[${pr_number}]}")
+
+                                        # Cancel active pipelines first
+                                        if [ -n "${active_pipelines}" ]; then
+                                            echo "Canceling active pipelines..."
+                                            while IFS= read -r pipeline_id; do
+                                                gitlab_cancel_pipeline "${repo}" "${pipeline_id}" || true
+                                            done <<<"${active_pipelines}"
+                                            echo ""
+                                        fi
+
+                                        # Create new pipeline
+                                        echo "Creating new pipeline for MR #${pr_number}..."
+                                        gitlab_create_pipeline "${repo}" "${pr_number}" || true
+                                    else
+                                        echo "No failed pipelines to restart for this MR."
+                                        echo "(Note: Only pipelines in FAILURE state can be restarted)"
+                                    fi
+                                fi
+                            fi
+                        done
+
+                            echo ""
+                            echo "Pipeline restart requests completed."
+                            echo ""
+                            echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                            echo ""
+                        else
+                            echo ""
+                            echo "No failed pipelines to restart."
+                            echo "(Note: Only pipelines in FAILURE state can be restarted; CANCELED and UNKNOWN cannot be restarted)"
+                            echo ""
+                            echo "Retrieving data for ${#pr_numbers[@]} MRs in ${repo}..."
+                            echo ""
+                        fi
                     fi
                 fi
             fi
@@ -2312,10 +2538,12 @@ while true; do
             echo "There are ${FAILED_CHECKS} failed check(s)."
             if [ "${SERVICE}" = "github" ]; then
                 github_rerun_action
+            elif [ "${SERVICE}" = "gitlab" ] || [[ "${SERVICE}" =~ gitlab ]]; then
+                gitlab_restart_pipeline
             else
                 echo ""
-                echo "Note: Check re-run functionality is only available for GitHub."
-                echo "GitLab/Gitea/Forgejo services do not support automatic check re-runs via API."
+                echo "Note: Check re-run functionality is only available for GitHub and GitLab."
+                echo "Gitea/Forgejo services do not support automatic check re-runs via API."
                 break
             fi
         else
