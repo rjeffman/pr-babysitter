@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Version
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 
 # GitHub API constants
 readonly GITHUB_API_VERSION="2022-11-28"
