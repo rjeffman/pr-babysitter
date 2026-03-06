@@ -1,7 +1,7 @@
 pr-babysitter
 =============
 
-A CLI tool to monitor and restart failed checks in GitHub pull requests. Also supports monitoring checks on Gitea/Forgejo instances (Codeberg, self-hosted).
+A CLI tool to monitor and restart failed checks in GitHub pull requests and GitLab merge requests. Also supports monitoring checks on Gitea/Forgejo instances (Codeberg, self-hosted).
 
 ## Installation
 
@@ -40,7 +40,7 @@ Ensure that `~/bin` is in your system's `PATH` environment variable. If not, you
 - **git** - Version control system (for automatic repository detection)
 - **fold** - Text folding utility (typically pre-installed on Unix systems)
 
-**Note:** Authentication token is only required for GitHub. Gitea/Forgejo instances use public API endpoints.
+**Note:** Authentication tokens are required for GitHub and GitLab. Gitea/Forgejo instances use public API endpoints.
 
 ### Optional
 
@@ -55,13 +55,16 @@ pr-babysitter [OPTIONS] -c CHECK_ID [REPO]
 pr-babysitter [OPTIONS] -W WORKFLOW_ID [REPO]
 ```
 
-Monitor the status of checks for pull requests on GitHub, Codeberg, or custom Gitea/Forgejo instances. For GitHub, can also directly re-run failed checks/workflows. Supports monitoring multiple PRs simultaneously.
+Monitor the status of checks for pull requests on GitHub, GitLab, Codeberg, or custom Gitea/Forgejo instances. For GitHub, can directly re-run failed checks/workflows. For GitLab, can restart failed pipelines. Supports monitoring multiple PRs/MRs simultaneously.
 
 Desktop notifications will be sent when checks fail (if available).
 
 ## Supported Services
 
-- **GitHub** (github.com) - Full support: monitoring and re-running checks
+- **GitHub** (github.com) - Full support: monitoring and re-running checks/workflows
+- **GitLab** (gitlab.com or self-hosted) - Full support: monitoring and restarting pipelines
+  - Pipeline restart only works for pipelines in FAILURE state (not CANCELED or UNKNOWN)
+  - Requires `api` scope token for restart, or `read_api` for monitoring only
 - **Codeberg** (codeberg.org) - Monitoring only (no re-run support)
 - **Custom Gitea/Forgejo** - Monitoring only (no re-run support)
 
@@ -143,6 +146,18 @@ You can set the token by:
   GITHUB_TOKEN="your_token_here"
   ```
 
+**For GitLab (required):**
+
+A GitLab personal access token is required. Set it in either `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` environment variable.
+
+- For pipeline restart functionality: Token requires `api` scope (full API access)
+- For monitoring only: Token can use `read_api` scope (read-only access)
+
+You can add the token to your configuration file (`~/.pr-babysitter` or `~/.config/pr-babysitter`):
+```bash
+GITLAB_TOKEN="your_token_here"
+```
+
 **For Gitea/Forgejo (Codeberg, etc.):**
 
 No authentication required. The script uses public API endpoints.
@@ -153,8 +168,9 @@ No authentication required. The script uses public API endpoints.
 - `-w SECONDS` - Wait time in seconds between checks (default: 300)
 - `-s SERVICE` - Remote service to use (default: github)
   - `github` - GitHub (github.com)
+  - `gitlab` - GitLab (gitlab.com)
   - `codeberg` - Codeberg (codeberg.org)
-  - `https://HOST` - Custom Gitea/Forgejo instance URL
+  - `https://HOST` - Custom GitLab/Gitea/Forgejo instance URL
 - `-r MODE` - Re-run mode for failed checks (GitHub only):
   - `ask` - Prompt for re-run option (default)
   - `check` - Re-run individual check runs
@@ -188,6 +204,12 @@ pr-babysitter -r workflow 123              # Auto re-run entire workflows (GitHu
 pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs (GitHub only)
 pr-babysitter -r label:re-run 123          # Add 're-run' label to PR (GitHub only)
 
+# GitLab
+pr-babysitter -s gitlab 123 owner/repo     # Monitor MR on GitLab.com
+pr-babysitter -s https://gitlab.example.com 123 owner/repo  # Self-hosted GitLab
+# When monitoring completes with failures, GitLab offers interactive pipeline restart
+# Note: Only pipelines in FAILURE state can be restarted
+
 # Codeberg
 pr-babysitter -s codeberg 123 owner/repo   # Monitor PR on Codeberg
 
@@ -204,6 +226,11 @@ Multi-PR mode is automatically activated when you provide a repository followed 
 pr-babysitter owner/repo 123 456 789       # Monitor PRs 123, 456, 789
 pr-babysitter -w 60 owner/repo 123 456     # Monitor with 1-minute interval
 
+# GitLab
+pr-babysitter -s gitlab owner/repo 123 456 789    # Monitor MRs on GitLab.com
+pr-babysitter -s https://gitlab.example.com owner/repo 123 456  # Self-hosted GitLab
+# Press 'R' to restart failed pipelines, 'D' to view MR details
+
 # Codeberg
 pr-babysitter -s codeberg owner/repo 123 456 789
 
@@ -217,3 +244,32 @@ pr-babysitter owner/repo 123               # Same as: pr-babysitter 123 owner/re
 pr-babysitter -c 61523939520 owner/repo    # Re-run specific check run
 pr-babysitter -W 21373540416 owner/repo    # Re-run specific workflow run
 ```
+
+## Interactive Restart Features
+
+### GitHub
+
+When monitoring completes and failures are detected, GitHub offers an interactive menu with options:
+1. Re-run individual check runs (default)
+2. Re-run entire workflow runs (all jobs)
+3. Re-run only failed jobs in workflows
+4. Add a label to re-run checks
+
+In multi-PR mode, press `R` to enter restart mode for all PRs with failures.
+
+### GitLab
+
+When monitoring completes and failures are detected, GitLab offers interactive pipeline restart:
+- **Single MR mode**: Prompts to restart the failed pipeline (y/n)
+- **Multi-MR mode**: Press `R` to restart failed pipelines for all MRs with failures
+
+**Important notes for GitLab:**
+- Only pipelines in **FAILURE** state can be restarted
+- Pipelines in CANCELED or UNKNOWN state cannot be restarted
+- The restart process:
+  1. Cancels any active/running pipelines
+  2. Creates a new pipeline for the MR's source branch
+
+### Gitea/Forgejo
+
+No automatic restart functionality available. These services do not support check re-runs via API.
