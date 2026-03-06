@@ -171,12 +171,13 @@ No authentication required. The script uses public API endpoints.
   - `gitlab` - GitLab (gitlab.com)
   - `codeberg` - Codeberg (codeberg.org)
   - `https://HOST` - Custom GitLab/Gitea/Forgejo instance URL
-- `-r MODE` - Re-run mode for failed checks (GitHub only):
+- `-r MODE` - Re-run mode for failed checks:
   - `ask` - Prompt for re-run option (default)
-  - `check` - Re-run individual check runs
-  - `workflow` - Re-run entire workflow runs
-  - `failed-jobs` - Re-run only failed jobs in workflows
-  - `label:NAME` - Add specified label NAME to the PR
+  - `check` - Re-run individual check runs (GitHub only)
+  - `workflow` - Re-run entire workflow runs (GitHub only)
+  - `failed-jobs` - Re-run only failed jobs in workflows (GitHub only)
+  - `label:NAME` - Add specified label NAME to the PR (GitHub only)
+  - `comment:TEXT` - Add comment TEXT to the PR/MR (GitHub and GitLab)
 - `-c CHECK_ID` - Directly re-run a specific check run by ID (GitHub only)
 - `-W WORKFLOW_ID` - Directly re-run a specific workflow run by ID (GitHub only)
 - `-v` - Enable verbose mode
@@ -203,9 +204,11 @@ pr-babysitter -w 300 123                   # Monitor with 5 minute interval
 pr-babysitter -r workflow 123              # Auto re-run entire workflows (GitHub only)
 pr-babysitter -r failed-jobs -f 123        # Re-run failed jobs (GitHub only)
 pr-babysitter -r label:re-run 123          # Add 're-run' label to PR (GitHub only)
+pr-babysitter -r comment:"Please review" 123  # Add comment to PR (GitHub)
 
 # GitLab
 pr-babysitter -s gitlab 123 owner/repo     # Monitor MR on GitLab.com
+pr-babysitter -s gitlab -r comment:"Restarting tests" 123 owner/repo  # Add comment to MR
 pr-babysitter -s https://gitlab.example.com 123 owner/repo  # Self-hosted GitLab
 # When monitoring completes with failures, GitLab offers interactive pipeline restart
 # Note: Only pipelines in FAILURE state can be restarted
@@ -254,14 +257,17 @@ When monitoring completes and failures are detected, GitHub offers an interactiv
 2. Re-run entire workflow runs (all jobs)
 3. Re-run only failed jobs in workflows
 4. Add a label to re-run checks
+5. Add a comment to the PR
 
 In multi-PR mode, press `R` to enter restart mode for all PRs with failures.
 
 ### GitLab
 
-When monitoring completes and failures are detected, GitLab offers interactive pipeline restart:
-- **Single MR mode**: Prompts to restart the failed pipeline (y/n)
-- **Multi-MR mode**: Press `R` to restart failed pipelines for all MRs with failures
+When monitoring completes and failures are detected, GitLab offers interactive restart options:
+- **Single MR mode**: Menu with options:
+  1. Restart pipeline (cancel active and create new)
+  2. Add a comment to the MR
+- **Multi-MR mode**: Press `R` to access restart options for all MRs with failures
 
 **Important notes for GitLab:**
 - Only pipelines in **FAILURE** state can be restarted

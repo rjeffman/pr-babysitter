@@ -45,6 +45,7 @@ usage() {
     echo "                  workflow    - Re-run entire workflow runs"
     echo "                  failed-jobs - Re-run only failed jobs in workflows"
     echo "                  label:NAME  - Add specified label NAME to the PR"
+    echo "                  comment:TEXT - Add comment TEXT to the PR/MR"
     echo "  -c CHECK_ID   Directly re-run a specific check run by ID (GitHub only)"
     echo "  -W WORKFLOW_ID Directly re-run a specific workflow run by ID (GitHub only)"
     echo "  -v            Enable verbose mode"
@@ -1244,6 +1245,71 @@ github_rerun_label() {
     fi
 }
 
+# Add a comment to a GitHub PR
+github_add_pr_comment() {
+    local repo="${1}"
+    local pr_number="${2}"
+    local comment_body="${3}"
+
+    echo "  Adding comment to PR #${pr_number}..."
+    local result
+    result=$(service_api_post "/repos/${repo}/issues/${pr_number}/comments" \
+        -H "Content-Type: application/json" \
+        -d "{\"body\":\"${comment_body}\"}")
+
+    if echo "${result}" | jq -e '.id' >/dev/null 2>&1; then
+        echo "  ✓ Comment added successfully"
+        return 0
+    else
+        echo "  ✗ Failed to add comment"
+        return 1
+    fi
+}
+
+# Add a comment to a GitLab MR
+gitlab_add_mr_comment() {
+    local repo="${1}"
+    local mr_number="${2}"
+    local comment_body="${3}"
+    local project_id
+    project_id=$(get_project_id "${repo}")
+
+    echo "  Adding comment to MR #${mr_number}..."
+    local result
+    result=$(gitlab_api_post "/projects/${project_id}/merge_requests/${mr_number}/notes" \
+        -H "Content-Type: application/json" \
+        -d "{\"body\":\"${comment_body}\"}")
+
+    if echo "${result}" | jq -e '.id' >/dev/null 2>&1; then
+        echo "  ✓ Comment added successfully"
+        return 0
+    else
+        echo "  ✗ Failed to add comment"
+        return 1
+    fi
+}
+
+# Add a comment to PR/MR based on service type
+add_pr_comment() {
+    local repo="${1}"
+    local pr_number="${2}"
+    local comment_body="${3}"
+    local service="${SERVICE:-github}"
+
+    case "${service}" in
+        github)
+            github_add_pr_comment "${repo}" "${pr_number}" "${comment_body}"
+            ;;
+        gitlab|https://*gitlab*)
+            gitlab_add_mr_comment "${repo}" "${pr_number}" "${comment_body}"
+            ;;
+        *)
+            echo "  ✗ Adding comments is not supported for this service"
+            return 1
+            ;;
+    esac
+}
+
 # Prompt user to select a re-run strategy or return preset mode
 ask_rerun_option() {
     local rerun_mode="${1}"
@@ -1261,9 +1327,10 @@ ask_rerun_option() {
     echo "  2) Re-run entire workflow runs (all jobs)" >&2
     echo "  3) Re-run only failed jobs in workflows" >&2
     echo "  4) Add a label to re-run checks" >&2
+    echo "  5) Add a comment to the PR" >&2
     echo "  n) Skip re-run" >&2
     echo "" >&2
-    read -p "Select option (1-3, n): " -n 1 -r
+    read -p "Select option (1-5, n): " -n 1 -r
     echo "" >&2
 
     case ${REPLY} in
@@ -1279,6 +1346,9 @@ ask_rerun_option() {
         4)
             echo "label"
             ;;
+        5)
+            echo "comment"
+            ;;
         [Nn])
             echo "skip"
             ;;
@@ -1291,28 +1361,26 @@ ask_rerun_option() {
 
 # Execute GitLab pipeline restart action
 gitlab_restart_pipeline() {
-    # Check if there are any failed pipelines (only FAILURE state, not CANCELED or UNKNOWN)
-    local failed_pipelines
-    failed_pipelines=$(jq -r '[.[] | select(.state == "FAILURE") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${CHECKS_JSON}")
-
-    if [ -z "${failed_pipelines}" ]; then
-        echo ""
-        echo "No failed pipelines to restart."
-        return 0
-    fi
-
     echo ""
-    echo "Restart failed pipeline?"
-    echo "  y) Yes - Cancel active pipelines and create new pipeline"
-    echo "  n) No - Skip restart"
+    echo "Restart options:"
+    echo "  1) Restart pipeline (cancel active and create new)"
+    echo "  2) Add a comment to the MR"
+    echo "  n) Skip"
     echo ""
-    read -p "Select option (y/n): " -n 1 -r
+    read -p "Select option (1-2, n): " -n 1 -r
     echo ""
 
     case ${REPLY} in
-        [Yy])
+        1)
             echo ""
-            if [ -n "${failed_pipelines}" ]; then
+            # Check if there are any failed pipelines (only FAILURE state, not CANCELED or UNKNOWN)
+            local failed_pipelines
+            failed_pipelines=$(jq -r '[.[] | select(.state == "FAILURE") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${CHECKS_JSON}")
+
+            if [ -z "${failed_pipelines}" ]; then
+                echo "No failed pipelines to restart."
+                echo "(Note: Only pipelines in FAILURE state can be restarted)"
+            else
                 # Get active pipeline IDs
                 local active_pipelines
                 active_pipelines=$(jq -r '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED") | select(.appName == "GitLab CI")] | unique_by(.checkSuiteId) | .[].checkSuiteId' <<<"${CHECKS_JSON}")
@@ -1329,16 +1397,28 @@ gitlab_restart_pipeline() {
                 # Create new pipeline
                 echo "Creating new pipeline for MR #${PR_NUMBER}..."
                 gitlab_create_pipeline "${REPO}" "${PR_NUMBER}" || true
+            fi
+            ;;
+        2)
+            echo ""
+            IFS= read -p "Comment text: " -r COMMENT_TEXT
+            if [ -n "${COMMENT_TEXT}" ]; then
+                echo "Adding comment to MR #${PR_NUMBER}..."
+                if add_pr_comment "${REPO}" "${PR_NUMBER}" "${COMMENT_TEXT}"; then
+                    echo "Comment added successfully"
+                else
+                    echo "Failed to add comment"
+                fi
             else
-                echo "No failed GitLab CI pipelines found."
+                echo "No comment text provided. Skipping."
             fi
             ;;
         [Nn])
-            echo "Skipping pipeline restart."
+            echo "Skipping."
             return 0
             ;;
         *)
-            echo "Invalid option. Skipping pipeline restart."
+            echo "Invalid option. Skipping."
             return 0
             ;;
     esac
@@ -1375,6 +1455,23 @@ github_rerun_action() {
             ;;
         label)
             github_rerun_label "${REPO}" "${PR_NUMBER}"
+            ;;
+        comment)
+            echo ""
+            # Check if COMMENT_TEXT was provided via command line
+            if [ -z "${COMMENT_TEXT:-}" ]; then
+                IFS= read -p "Comment text: " -r COMMENT_TEXT
+            fi
+            if [ -n "${COMMENT_TEXT}" ]; then
+                echo "Adding comment to PR #${PR_NUMBER}..."
+                if add_pr_comment "${REPO}" "${PR_NUMBER}" "${COMMENT_TEXT}"; then
+                    echo "Comment added successfully"
+                else
+                    echo "Failed to add comment"
+                fi
+            else
+                echo "No comment text provided. Skipping."
+            fi
             ;;
         skip)
             echo "Skipping re-run."
@@ -1695,9 +1792,10 @@ monitor_multiple_prs() {
                                 echo "  2) Re-run entire workflow runs (all jobs)"
                                 echo "  3) Re-run only failed jobs in workflows"
                                 echo "  4) Add a label to re-run checks"
+                                echo "  5) Add a comment to the PR"
                                 echo "  s) Skip this PR"
                                 echo ""
-                                read -p "Select option (1-4, s): " -n 1 -r
+                                read -p "Select option (1-5, s): " -n 1 -r
                                 echo ""
 
                                 case ${REPLY} in
@@ -1769,6 +1867,20 @@ monitor_multiple_prs() {
                                             echo "  Successfully added label '${LABEL_NAME}'"
                                         else
                                             echo "  Failed to add label"
+                                        fi
+                                        ;;
+                                    5)
+                                        echo ""
+                                        IFS= read -p "Comment text: " -r COMMENT_TEXT
+                                        if [ -n "${COMMENT_TEXT}" ]; then
+                                            echo "Adding comment to PR #${pr_number}..."
+                                            if add_pr_comment "${repo}" "${pr_number}" "${COMMENT_TEXT}"; then
+                                                echo "  Successfully added comment"
+                                            else
+                                                echo "  Failed to add comment"
+                                            fi
+                                        else
+                                            echo "No comment text provided. Skipping."
                                         fi
                                         ;;
                                     [Ss])
@@ -2128,8 +2240,9 @@ check_dependencies
 WAIT_TIME="${DEFAULT_WAIT_TIME}"
 FAILED_ONLY=false
 SERVICE="github"  # Default service (github, codeberg, or custom URL)
-RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label
+RERUN_MODE="ask"  # ask, check, workflow, failed-jobs, label, comment
 LABEL_NAME=""     # Label name to add to PR when using label mode
+COMMENT_TEXT=""   # Comment text to add to PR/MR when using comment mode
 CHECK_ID=""       # Direct check run ID to re-run
 WORKFLOW_ID=""    # Direct workflow run ID to re-run
 
@@ -2162,8 +2275,17 @@ while getopts "fw:s:r:c:W:vVh" opt; do
                         exit 1
                     fi
                     ;;
+                comment:*)
+                    RERUN_MODE="comment"
+                    COMMENT_TEXT="${OPTARG#comment:}"
+                    if [[ -z "${COMMENT_TEXT:-}" ]]
+                    then
+                        echo "Error: Comment text must not be empty."
+                        exit 1
+                    fi
+                    ;;
                 *)
-                    echo "Error: Invalid rerun mode. Use: check, workflow, failed-jobs, label:NAME, or ask"
+                    echo "Error: Invalid rerun mode. Use: check, workflow, failed-jobs, label:NAME, comment:TEXT, or ask"
                     exit 1
                     ;;
             esac
