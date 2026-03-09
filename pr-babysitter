@@ -2492,7 +2492,7 @@ RESET="\033[0m"
 # If failed-only mode, show failed checks and exit
 if [ "${FAILED_ONLY}" = true ]; then
     CHECKS_JSON=$(get_check_runs "${REPO}" "${PR_HEAD_SHA}" "${PR_NUMBER}")
-    FAILED_CHECKS=$(jq '[.[] | select(.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED")] | length' <<<"${CHECKS_JSON}")
+    FAILED_CHECKS=$(jq '[.[] | select(.state == "FAILURE" or .state == "CANCELED")] | length' <<<"${CHECKS_JSON}")
 
     if [ "${FAILED_CHECKS}" -eq 0 ]; then
         echo "No failed checks found for PR #${PR_NUMBER}"
@@ -2543,7 +2543,7 @@ if [ "${FAILED_ONLY}" = true ]; then
         echo "Last push: ${PR_PUSH_TIMESTAMP}"
     fi
     echo ""
-    render_checks '.state != "SUCCESS" and .state != "IN_PROGRESS" and .state != "QUEUED"' <<<"${CHECKS_JSON}"
+    render_checks '.state == "FAILURE" or .state == "CANCELED"' <<<"${CHECKS_JSON}"
     send_desktop_notification "${FAILED_CHECKS}" "${PR_TITLE}"
     exit 0
 fi
@@ -2557,7 +2557,7 @@ fi
 echo ""
 
 # Common filters
-FAILED_CHECK_FILTER=".state != \"SUCCESS\" and .state != \"IN_PROGRESS\" and .state != \"QUEUED\""
+FAILED_CHECK_FILTER=".state == \"FAILURE\" or .state == \"CANCELED\""
 RUNNING_CHECK_FILTER=".state == \"IN_PROGRESS\" or .state == \"QUEUED\""
 
 # Track previous failure count to avoid notification spam
