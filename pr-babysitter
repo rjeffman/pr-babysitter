@@ -997,7 +997,7 @@ render_checks() {
          elif .state == \"CANCELED\" then \"🚫\"
          else \"❓\" end) as \$emoji |
         \"\\(\$emoji) \\(.name)\" +
-        (if .state == \"FAILURE\" or .state == \"IN_PROGRESS\" then \"\\n\\(.link)\" else \"\" end)"
+        (if .state == \"FAILURE\" then \"\\n\\(.link)\" else \"\" end)"
 }
 
 # Render compact 3-4 line PR/MR summary with emoji-only check status
